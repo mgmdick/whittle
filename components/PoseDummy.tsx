@@ -3,6 +3,7 @@
 import { useMemo, useRef, useState } from "react";
 import DummyFigure, { DUMMY_VIEWBOX, GROUND_Y } from "./DummyFigure";
 import PainSheet from "./PainSheet";
+import { usePersistentState } from "@/lib/storage";
 import {
   JOINT_DRIVES,
   PART_LABEL,
@@ -18,7 +19,7 @@ import {
 } from "@/lib/pose";
 import { intensityColor, uid, type Movement, type PoseView } from "@/lib/types";
 
-type Props = { onSave: (m: Movement) => void };
+type Props = { onSave: (m: Movement) => void; onAssess: () => void };
 
 type Drag = {
   pointerId: number;
@@ -29,12 +30,13 @@ type Drag = {
   moved: boolean;
 };
 
-export default function PoseDummy({ onSave }: Props) {
-  const [view, setView] = useState<PoseView>("front");
-  const [angles, setAngles] = useState<Record<string, number>>({ ...PRESETS[0].angles });
-  const [presetName, setPresetName] = useState("Standing");
-  const [painParts, setPainParts] = useState<string[]>([]);
-  const [intensity, setIntensity] = useState(6);
+export default function PoseDummy({ onSave, onAssess }: Props) {
+  const [savedCount, setSavedCount] = useState(0);
+  const [view, setView] = usePersistentState<PoseView>("bodymap.pose.view.v1", "front");
+  const [angles, setAngles] = usePersistentState<Record<string, number>>("bodymap.pose.angles.v1", { ...PRESETS[0].angles });
+  const [presetName, setPresetName] = usePersistentState("bodymap.pose.preset.v1", "Standing");
+  const [painParts, setPainParts] = usePersistentState<string[]>("bodymap.pose.pain.v1", []);
+  const [intensity, setIntensity] = usePersistentState("bodymap.pose.intensity.v1", 6);
   const [frozenPelvis, setFrozenPelvis] = useState<Pt | null>(null);
   const [activeSeg, setActiveSeg] = useState<SegId | null>(null);
   const [readout, setReadout] = useState<string | null>(null);
@@ -170,7 +172,7 @@ export default function PoseDummy({ onSave }: Props) {
           view={view}
           pelvis={pelvis}
           painParts={painParts}
-          painColor={intensityColor(intensity)}
+          intensity={intensity}
           activeSeg={activeSeg}
           interactive
           className="dummy-svg"
@@ -220,6 +222,11 @@ export default function PoseDummy({ onSave }: Props) {
         >
           Save this painful movement
         </button>
+        {savedCount > 0 && (
+          <button className="btn accent full" onClick={onAssess}>
+            Assess my pain →
+          </button>
+        )}
       </div>
 
       {saving && (
@@ -255,6 +262,7 @@ export default function PoseDummy({ onSave }: Props) {
               note: [d.types.join(", "), d.note].filter(Boolean).join(" — "),
             });
             setSaving(false);
+            setSavedCount((n) => n + 1);
             setSavedFlash(true);
             window.setTimeout(() => setSavedFlash(false), 1600);
           }}

@@ -154,7 +154,8 @@ function MoveItem({ e }: { e: Extract<LogEntry, { kind: "movement" }> }) {
           view={e.view}
           pelvis={pelvis}
           painParts={e.painParts}
-          painColor={intensityColor(e.intensity)}
+          intensity={e.intensity}
+          compact
           className="thumb dummy-thumb"
         />
       </div>

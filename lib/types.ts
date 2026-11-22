@@ -56,6 +56,14 @@ export function intensityColor(i: number): string {
   return `hsl(${hue.toFixed(0)} 92% ${light.toFixed(0)}%)`;
 }
 
+/** The intensity colour, lightened (+) or darkened (−) by `dl` lightness points. */
+export function painShade(i: number, dl: number): string {
+  const t = Math.min(Math.max((i - 1) / 9, 0), 1);
+  const hue = 52 - t * 52;
+  const light = Math.min(92, Math.max(12, 56 - t * 10 + dl));
+  return `hsl(${hue.toFixed(0)} 88% ${light.toFixed(0)}%)`;
+}
+
 export function intensityWord(i: number): string {
   if (i <= 2) return "Mild";
   if (i <= 4) return "Uncomfortable";

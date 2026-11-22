@@ -3,19 +3,21 @@
 import { useRef, useState } from "react";
 import BodyFigure from "./BodyFigure";
 import PainSheet from "./PainSheet";
+import { hitTest } from "@/lib/regions";
 import { intensityColor, uid, type PainMarker, type View } from "@/lib/types";
 
 type Props = {
   markers: PainMarker[];
   setMarkers: (fn: (m: PainMarker[]) => PainMarker[]) => void;
   onSaveToLog: (note: string) => void;
+  onAssess: () => void;
 };
 
 type Pending =
   | { mode: "new"; view: View; x: number; y: number; regionId: string; region: string }
   | { mode: "edit"; marker: PainMarker };
 
-export default function BodyMap({ markers, setMarkers, onSaveToLog }: Props) {
+export default function BodyMap({ markers, setMarkers, onSaveToLog, onAssess }: Props) {
   const [view, setView] = useState<View>("front");
   const [zoom, setZoom] = useState(1);
   const [pending, setPending] = useState<Pending | null>(null);
@@ -30,8 +32,7 @@ export default function BodyMap({ markers, setMarkers, onSaveToLog }: Props) {
       if (m) setPending({ mode: "edit", marker: m });
       return;
     }
-    const regionId = target.getAttribute("data-region");
-    if (!regionId) {
+    if (!target.closest("[data-body]")) {
       setHint("Tap on the body itself");
       window.setTimeout(() => setHint(null), 1400);
       return;
@@ -41,13 +42,19 @@ export default function BodyMap({ markers, setMarkers, onSaveToLog }: Props) {
     pt.x = e.clientX;
     pt.y = e.clientY;
     const p = pt.matrixTransform(svg.getScreenCTM()!.inverse());
+    const region = hitTest(view, p.x, p.y);
+    try {
+      navigator.vibrate?.(8);
+    } catch {
+      /* not supported */
+    }
     setPending({
       mode: "new",
       view,
       x: Math.round(p.x * 10) / 10,
       y: Math.round(p.y * 10) / 10,
-      regionId,
-      region: target.getAttribute("data-name") ?? "Body",
+      regionId: region.id,
+      region: region.name,
     });
   };
 
@@ -127,6 +134,9 @@ export default function BodyMap({ markers, setMarkers, onSaveToLog }: Props) {
               </li>
             ))}
           </ul>
+          <button className="btn accent full" onClick={onAssess}>
+            Assess my pain →
+          </button>
           <SaveRow onSave={onSaveToLog} />
         </div>
       )}
@@ -176,7 +186,7 @@ function SaveRow({ onSave }: { onSave: (note: string) => void }) {
           setNote("");
         }}
       >
-        Save to log
+        Save
       </button>
     </div>
   );
