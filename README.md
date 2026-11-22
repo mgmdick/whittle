@@ -1,4 +1,6 @@
-# Where it hurts
+# Whittle
+
+*Whittle down what's hurting.*
 
 A small mobile web app for showing where you're sore:
 
@@ -40,19 +42,17 @@ iPhone use Share → *Add to Home Screen*; on Android, *Install app*.
 ## Run locally
 
 ```bash
-cd body-map
 npm install
 npm run dev   # http://localhost:3000
 ```
 
 ## Deploy to Vercel
 
-This app lives in the `body-map/` folder of the repo, next to the Story Prompts
-app, so it's deployed as its **own** Vercel project:
-
 1. In Vercel, **Add New → Project** and import this repository.
-2. Set **Root Directory** to `body-map`. Framework preset: Next.js (auto-detected).
+2. Framework preset: Next.js (auto-detected). No other settings needed.
 3. Click **Deploy**. No environment variables are required.
+
+Every push to `main` redeploys automatically.
 
 ### Optional: AI second opinion
 
@@ -66,6 +66,3 @@ Vercel → Project → Settings → Environment Variables, then redeploy:
 
 Only the pain descriptions and quick-question answers are sent — no names.
 Without the key the card simply doesn't appear.
-
-Or from the CLI: `cd body-map && npx vercel` (choose the defaults), then
-`npx vercel --prod`.

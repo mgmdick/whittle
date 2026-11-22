@@ -21,7 +21,7 @@ const fmt = (t: number) =>
   });
 
 export function summarize(entries: LogEntry[]): string {
-  const lines: string[] = ["Pain log", ""];
+  const lines: string[] = ["Pain log (from Whittle)", ""];
   for (const e of entries) {
     lines.push(fmt(e.createdAt));
     if (e.kind === "map") {

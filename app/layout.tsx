@@ -5,9 +5,9 @@ import "./globals.css";
 const sans = Plus_Jakarta_Sans({ subsets: ["latin"], variable: "--font-sans", display: "swap" });
 
 export const metadata: Metadata = {
-  title: "Where it hurts",
-  description: "Tap where you're sore or pose a mannequin to show what hurts, then get an assessment of what it could be.",
-  appleWebApp: { capable: true, title: "Where it hurts", statusBarStyle: "default" },
+  title: "Whittle",
+  description: "Show where it hurts on a wooden mannequin, learn the muscles involved and what it could be.",
+  appleWebApp: { capable: true, title: "Whittle", statusBarStyle: "default" },
 };
 
 export const viewport: Viewport = {

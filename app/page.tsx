@@ -75,7 +75,7 @@ export default function Home() {
             </svg>
           </span>
           <div>
-            <h1>Where it hurts</h1>
+            <h1>Whittle</h1>
             <p className="tagline">{SUBTITLE[tab]}</p>
           </div>
         </div>

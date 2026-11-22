@@ -2,9 +2,9 @@ import type { MetadataRoute } from "next";
 
 export default function manifest(): MetadataRoute.Manifest {
   return {
-    name: "Where it hurts",
-    short_name: "Where it hurts",
-    description: "Tap where you're sore or pose a dummy to show what movement hurts.",
+    name: "Whittle — where it hurts",
+    short_name: "Whittle",
+    description: "Show where it hurts on a wooden mannequin, learn the muscles involved and what it could be.",
     start_url: "/",
     display: "standalone",
     background_color: "#f4ece0",
