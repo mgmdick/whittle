@@ -28,7 +28,7 @@ const Body = z.object({
     onset: z.string().nullable(),
     age: z.string().nullable(),
     sex: z.string().nullable(),
-    flags: z.array(z.string().max(80)).max(12),
+    flags: z.array(z.string().max(80)).max(30),
   }),
   ruleBased: z.array(z.string().max(120)).max(8),
   accessCode: z.string().max(200).optional(),
@@ -59,7 +59,7 @@ function describe(b: z.infer<typeof Body>): string {
     `How it started: ${q.onset ?? "not given"}`,
     `Age band: ${q.age ?? "not given"}`,
     `Sex: ${q.sex ?? "not given"}`,
-    `Red flags reported: ${q.flags.length ? q.flags.join("; ") : "none"}`
+    `Red flags and other symptoms reported: ${q.flags.length ? q.flags.join("; ") : "none"}`
   );
   if (b.ruleBased.length) lines.push("", `A simple rules-based checker suggested: ${b.ruleBased.join("; ")}. Use your own judgement.`);
   return lines.join("\n");

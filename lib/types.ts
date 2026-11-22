@@ -17,7 +17,11 @@ export type PoseView = "front" | "side";
 export type Movement = {
   id: string;
   createdAt: number;
-  view: PoseView;
+  view: PoseView | "3d";
+  /** 3D mannequin pose (quaternions per joint), tags derived from it, and a snapshot. */
+  pose3d?: { j: Record<string, number[]>; yaw: number };
+  tags?: string[];
+  thumb?: string;
   angles: Record<string, number>;
   painParts: string[];
   intensity: number;
@@ -54,6 +58,12 @@ export function intensityColor(i: number): string {
   const hue = 52 - t * 52;
   const light = 56 - t * 10;
   return `hsl(${hue.toFixed(0)} 92% ${light.toFixed(0)}%)`;
+}
+
+/** The intensity colour as HSL fractions (for WebGL colours). */
+export function intensityHSL(i: number): [number, number, number] {
+  const t = Math.min(Math.max((i - 1) / 9, 0), 1);
+  return [(52 - t * 52) / 360, 0.92, (56 - t * 10) / 100];
 }
 
 /** The intensity colour, lightened (+) or darkened (−) by `dl` lightness points. */

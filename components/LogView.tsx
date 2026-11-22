@@ -33,7 +33,7 @@ export function summarize(entries: LogEntry[]): string {
       if (e.note) lines.push(`  Note: ${e.note}`);
     } else {
       lines.push(`  • Hurts when: ${e.label} — ${e.intensity}/10`);
-      lines.push(`    Where: ${e.painParts.map((p) => PART_LABEL[p]).join(", ")}`);
+      lines.push(`    Where: ${e.painParts.map((p) => PART_LABEL[p] ?? p).join(", ")}`);
       if (e.note) lines.push(`    ${e.note}`);
     }
     lines.push("");
@@ -145,19 +145,24 @@ function MapItem({ e }: { e: Extract<LogEntry, { kind: "map" }> }) {
 }
 
 function MoveItem({ e }: { e: Extract<LogEntry, { kind: "movement" }> }) {
-  const pelvis = groundedPelvis(e.angles, e.view, DUMMY_VIEWBOX.w, GROUND_Y);
+  const view2d = e.view === "3d" ? null : e.view;
   return (
     <div className="log-body">
       <div className="thumbs">
+        {e.thumb ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={e.thumb} alt="Pose" className="thumb dummy-thumb photo" />
+        ) : !view2d ? null : (
         <DummyFigure
           angles={e.angles}
-          view={e.view}
-          pelvis={pelvis}
+          view={view2d}
+          pelvis={groundedPelvis(e.angles, view2d, DUMMY_VIEWBOX.w, GROUND_Y)}
           painParts={e.painParts}
           intensity={e.intensity}
           compact
           className="thumb dummy-thumb"
         />
+        )}
       </div>
       <div className="grow">
         <div className="log-head">
@@ -166,7 +171,7 @@ function MoveItem({ e }: { e: Extract<LogEntry, { kind: "movement" }> }) {
             {e.intensity}/10 · {intensityWord(e.intensity)}
           </span>
         </div>
-        <p className="small-text">{e.painParts.map((p) => PART_LABEL[p]).join(", ")}</p>
+        <p className="small-text">{e.painParts.map((p) => PART_LABEL[p] ?? p).join(", ")}</p>
         {e.note && <p className="note">{e.note}</p>}
       </div>
     </div>

@@ -2,19 +2,29 @@
 
 A small mobile web app for showing where you're sore:
 
-- **Body** — tap the exact spot on a front/back body map. Each spot gets a 1–10
-  intensity, what it feels like (sharp, aching, burning…) and a note.
-- **Dummy** — drag a posable mannequin's arms, legs, head and torso into the
-  position that hurts (or start from a preset like *Arms overhead*, *Bend
-  forward*, *Squat*), then tap the parts/joints that are sore. Angles are shown
-  while you drag (e.g. "Right upper arm · 120°").
+- **Body** — a carved-wood figure, front and back. Tap the exact sore spot to
+  give it a 1–10 intensity, what it feels like and a note; the app names the
+  **muscles under that spot** (superficial and deep). Switch to **Muscles** to
+  reveal an anatomical muscle layer; pinch, scroll or use **+** to zoom and
+  labels appear. Tap any muscle for what it does, how it hurts (including
+  referred pain), common causes and what helps. ~50 muscles and tendons
+  (`lib/muscles.ts`).
+- **Mannequin** — a 3D wooden artist's mannequin (three.js) on its stand.
+  Drag any limb to pose it: an IK solver moves the whole chain with realistic
+  joint limits, and live angles are shown ("Right shoulder · forward 120°").
+  Drag the background to orbit, pinch to zoom, tap a part to mark it sore.
+  **Physics** mode (cannon-es ragdoll) knocks it off the stand to flop, grab
+  and fling; **Stand up** animates it back. 17 preset poses. Falls back to a 2D
+  mannequin if WebGL isn't available.
 - **Assess** — answers a few quick questions (how long, how it started, age,
   red-flag symptoms) and gives:
   - a **triage verdict**: emergency / get seen today / book a doctor / self-care,
     with the reasons;
   - the **most likely explanations**, ranked, each with why it fits, what it is,
     what helps, and when to see a doctor. This runs on a built-in rules engine
-    (`lib/diagnose.ts`) covering ~45 common conditions — works offline, no key
+    (`lib/diagnose.ts`) covering ~100 conditions, using where the pain is (down to inner/outer side
+    and above/below the kneecap), the muscles under it, how it feels, painful
+    movements, and an "anything else?" symptom checklist — works offline, no key
     needed;
   - an optional **AI second opinion** from Claude (see below).
 - **Log** — saved maps and painful movements with dates; **Share with doctor**

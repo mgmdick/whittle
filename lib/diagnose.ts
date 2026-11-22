@@ -1,5 +1,6 @@
 import { PART_LABEL, norm } from "./pose";
 import { personSide, regionById } from "./regions";
+import { MUSCLE_BY_ID, musclesAt } from "./muscles";
 import type { Movement, PainMarker } from "./types";
 
 // A rules-based symptom checker. It suggests *possible* explanations and how
@@ -32,6 +33,24 @@ export const RED_FLAGS: { id: string; label: string }[] = [
   { id: "weightLoss", label: "Unexplained weight loss or pain at night" },
 ];
 
+// Extra symptoms that sharpen the picture (not emergencies by themselves).
+export const DETAILS: { id: string; label: string }[] = [
+  { id: "swollenJoint", label: "The joint looks swollen" },
+  { id: "locking", label: "Clicks, catches, locks or gives way" },
+  { id: "pop", label: "Felt a pop or snap when it started" },
+  { id: "morningStiff", label: "Stiff for over an hour after waking" },
+  { id: "firstSteps", label: "Worst with the first steps in the morning" },
+  { id: "walking", label: "Leg pain when walking that eases with rest" },
+  { id: "breathing", label: "Worse breathing in deeply or coughing" },
+  { id: "rash", label: "Rash, blisters or skin change over the pain" },
+  { id: "nightNumb", label: "Tingling or numbness that wakes you at night" },
+  { id: "sitting", label: "Worse after sitting, better moving" },
+  { id: "bulge", label: "A lump or bulge you can see or feel" },
+  { id: "urine", label: "Burning or frequent urination" },
+  { id: "jaw", label: "Jaw pain or clicking when chewing" },
+  { id: "running", label: "Started with running or more exercise" },
+];
+
 export type Finding = {
   loc: string;
   side: Side;
@@ -40,6 +59,13 @@ export type Finding = {
   label: string;
   source: "map" | "movement";
   tags: string[];
+  /** Closer to the body's midline than the region centre (inner side). */
+  medial?: boolean;
+  /** Further from the midline (outer side). */
+  lateral?: boolean;
+  /** In the lower part of the region (e.g. just below the kneecap). */
+  below?: boolean;
+  muscles: string[];
 };
 
 // Canonical location for each region key in each view.
@@ -61,13 +87,13 @@ const LOC: Record<"front" | "back", Record<string, string>> = {
 const PART_LOC: Record<string, string> = {
   head: "head", neck: "neck", torso: "lowBack", lowBack: "lowBack", shoulder: "shoulder", upperArm: "upperArm",
   elbow: "elbowPoint", forearm: "forearmExtensor", hand: "wristPalm", hip: "hip", thigh: "thighFront",
-  knee: "kneecap", shin: "shin", foot: "ankle",
+  knee: "kneecap", shin: "shin", foot: "ankle", chest: "upperBack", pelvis: "sacrum",
 };
 
 function movementTags(m: Movement): string[] {
   const t = `${m.label} ${m.note}`.toLowerCase();
-  const tags: string[] = [];
-  const a = m.angles;
+  const tags: string[] = [...(m.tags ?? [])];
+  const a = m.view === "3d" ? {} : m.angles;
   const armUp = Math.max(Math.abs(a.upperArmL ?? 0), Math.abs(a.upperArmR ?? 0));
   const torsoTilt = Math.abs(((a.torso ?? 180) + 360) % 360 - 180);
   if (armUp > 75 || /overhead|reach|raise|lift.*arm|shelf|hair/.test(t)) tags.push("overhead");
@@ -94,6 +120,8 @@ export function buildFindings(markers: PainMarker[], movements: Movement[]): Fin
     if (!r) continue;
     const loc = LOC[m.view][r.key];
     if (!loc) continue;
+    const c = r.shape.kind === "ellipse" ? { x: r.shape.cx, y: r.shape.cy, h: r.shape.ry * 2 } : { x: r.shape.x + r.shape.w / 2, y: r.shape.y + r.shape.h / 2, h: r.shape.h };
+    const dMid = Math.abs(m.x - 100) - Math.abs(c.x - 100);
     out.push({
       loc,
       side: r.side ? personSide(m.view, r.side) : null,
@@ -102,6 +130,10 @@ export function buildFindings(markers: PainMarker[], movements: Movement[]): Fin
       label: m.region,
       source: "map",
       tags: [],
+      medial: r.side ? dMid < -1.2 : undefined,
+      lateral: r.side ? dMid > 1.2 : undefined,
+      below: m.y > c.y + c.h * 0.12,
+      muscles: musclesAt(m.view, m.x, m.y).map((h) => h.muscle.id),
     });
   }
   for (const mv of movements) {
@@ -119,6 +151,7 @@ export function buildFindings(markers: PainMarker[], movements: Movement[]): Fin
         label: `${PART_LABEL[part]} when ${mv.label.toLowerCase()}`,
         source: "movement",
         tags,
+        muscles: [],
       });
     }
   }
@@ -129,9 +162,12 @@ export function buildFindings(markers: PainMarker[], movements: Movement[]): Fin
 
 type Ctx = { f: Finding[]; q: Intake };
 
+type Meta = { name?: string; about?: string; selfCare?: string[]; muscles?: string[] };
+
 class Score {
   points = 0;
   why: string[] = [];
+  meta: Meta = {};
   add(p: number, reason?: string) {
     if (p <= 0) return this;
     this.points += p;
@@ -170,6 +206,8 @@ export type Condition = {
   selfCare: string[];
   seeDoctor: string;
   urgency: Urgency;
+  /** Muscles/tendons typically involved (ids from lib/muscles). */
+  muscles?: string[];
   score: (c: Ctx) => Score;
 };
 
@@ -827,6 +865,7 @@ export const CONDITIONS: Condition[] = [
       if (feels(k, ["Aching"])) s.add(1, "Aching quality");
       if (younger(c)) s.add(1, "Common in your age group");
       if (c.q.onset === "gradual") s.add(1);
+      if (k.some((x) => x.source === "map") && k.filter((x) => x.source === "map").every((x) => x.below)) s.points -= 2.5;
       return s;
     },
   },
@@ -1074,6 +1113,1069 @@ export const CONDITIONS: Condition[] = [
   },
 ];
 
+// ---------------------------------------------------------------- more conditions
+
+const med = (fs: Finding[]) => fs.some((x) => x.medial);
+const lat = (fs: Finding[]) => fs.some((x) => x.lateral);
+const low = (fs: Finding[]) => fs.some((x) => x.below);
+const hasMuscle = (fs: Finding[], ids: string[]) => fs.some((x) => x.muscles.some((m) => ids.includes(m)));
+
+const MUSCLE_FOR: Record<string, string[]> = {
+  "tension-headache": ["suboccipitals", "trapezius", "temporalis"],
+  "neck-strain": ["levatorScapulae", "trapezius", "neckExtensors", "scm"],
+  "rotator-cuff": ["supraspinatus", "infraspinatus", "deltoid"],
+  "frozen-shoulder": ["supraspinatus", "infraspinatus"],
+  "tennis-elbow": ["forearmExtensors", "brachioradialis"],
+  "golfers-elbow": ["forearmFlexors"],
+  "carpal-tunnel": ["thenar", "forearmFlexors"],
+  "chest-wall": ["pecMajor", "intercostals"],
+  "abdominal-strain": ["rectusAbdominis", "obliques"],
+  "low-back-strain": ["erectorSpinae", "quadratusLumborum"],
+  sciatica: ["piriformis", "erectorSpinae"],
+  "si-joint": ["gluteMax", "gluteMed"],
+  piriformis: ["piriformis", "gluteMax"],
+  "upper-back-strain": ["rhomboids", "trapezius", "latissimus"],
+  "hip-bursitis": ["gluteMed", "tfl", "itBand"],
+  "groin-strain": ["adductors", "iliopsoas"],
+  "hamstring-strain": ["hamstringLateral", "hamstringMedial"],
+  "quad-strain": ["rectusFemoris", "vastusLateralis", "vastusMedialis"],
+  patellofemoral: ["vastusMedialis", "vastusLateralis", "rectusFemoris"],
+  "calf-strain": ["gastrocnemius", "soleus"],
+  "shin-splints": ["tibialisAnterior", "soleus"],
+  "ankle-sprain": ["peroneals"],
+  achilles: ["achillesTendon", "soleus", "gastrocnemius"],
+  "plantar-fasciitis": ["plantarFascia", "gastrocnemius"],
+};
+
+const MORE: Condition[] = [
+  {
+    id: "muscle-strain",
+    name: "Muscle strain or trigger point",
+    area: "Muscle",
+    about: "",
+    selfCare: [],
+    seeDoctor: "If it's not easing after 2–3 weeks, there's major bruising or swelling, or you can't use the limb.",
+    urgency: "selfcare",
+    score: (c) => {
+      const s = new Score();
+      const fs = c.f.filter((x) => x.source === "map" && x.muscles.length && !x.types.some((t) => NERVE.includes(t)));
+      if (!fs.length) return s;
+      const top = [...fs].sort((a, b) => b.intensity - a.intensity)[0];
+      const m = MUSCLE_BY_ID[top.muscles[0]];
+      if (!m || m.tendon) return s;
+      s.add(2.7 + top.intensity / 5, `${top.label}: over the ${m.name.toLowerCase()}`);
+      if (feels(fs, ["Aching", "Stiff", "Tender to touch", "Cramping"])) s.add(1.5, "Muscular quality (aching, tight, tender)");
+      if (c.q.onset === "injury") s.add(1.5, "Started with a strain");
+      if (tagged(c.f, ["flexion", "overhead", "twist", "stride", "grip"])) s.add(0.5);
+      s.meta = {
+        name: `Strain or trigger point: ${m.name}`,
+        about: `${m.name} — ${m.group.toLowerCase()}. It ${m.action.charAt(0).toLowerCase()}${m.action.slice(1)} ${m.pain} Common causes: ${m.causes.charAt(0).toLowerCase()}${m.causes.slice(1)}`,
+        selfCare: [m.relief, "Heat for tight muscles; ice for a fresh strain in the first 48 hours", "Keep gently active rather than resting completely"],
+        muscles: [m.id],
+      };
+      return s;
+    },
+  },
+  // ------------- head & neck
+  {
+    id: "tmj",
+    name: "Jaw joint disorder (TMJ / TMD)",
+    area: "Jaw & temple",
+    about: "Strain of the jaw joint and chewing muscles causes aching in front of the ear, cheek and temple, clicking, and pain chewing or opening wide. Often linked to clenching or grinding.",
+    selfCare: ["Soft foods for a while; avoid gum and wide yawns", "Relax the jaw: teeth apart, tongue on the roof of the mouth", "Warm compress and gentle massage of the cheek and temple"],
+    seeDoctor: "See a dentist or GP if it lasts more than a few weeks, the jaw locks, or you can't open your mouth fully.",
+    urgency: "selfcare",
+    muscles: ["temporalis"],
+    score: (c) => {
+      const s = new Score();
+      const h = at(c, ["head"]);
+      if (!flag(c, "jaw") && !hasMuscle(h, ["temporalis"])) return s;
+      if (h.length) located(s, h, 1.5);
+      if (flag(c, "jaw")) s.add(4.5, "Jaw pain or clicking when chewing");
+      if (hasMuscle(h, ["temporalis"])) s.add(2, "Over the jaw/temple muscles");
+      return s;
+    },
+  },
+  {
+    id: "cluster-headache",
+    name: "Cluster headache",
+    area: "Head (around one eye)",
+    about: "Excruciating, stabbing pain around or behind one eye lasting 15 minutes to 3 hours, often at the same time each day for weeks, with a watery eye or blocked nostril on that side.",
+    selfCare: ["High-flow oxygen and specific medicines work — see a doctor"],
+    seeDoctor: "See a GP for diagnosis and treatment. Seek urgent help for a first-ever severe headache.",
+    urgency: "doctor",
+    score: (c) => {
+      const s = new Score();
+      const h = at(c, ["head"]);
+      if (!h.length || !feels(h, ["Stabbing", "Sharp", "Burning"]) || peak(h) < 8) return s;
+      located(s, h, 1.5);
+      s.add(3, "Severe stabbing/burning head pain");
+      return s;
+    },
+  },
+  {
+    id: "occipital-neuralgia",
+    name: "Occipital neuralgia",
+    area: "Back of head",
+    about: "Irritation of the nerves running from the top of the neck over the back of the scalp causes sharp, shooting or electric pains at the base of the skull and up the back of the head, with a tender scalp.",
+    selfCare: ["Heat and massage at the base of the skull", "Posture breaks, chin tucks"],
+    seeDoctor: "See a GP if it's frequent or severe — nerve blocks can help.",
+    urgency: "doctor",
+    muscles: ["suboccipitals"],
+    score: (c) => {
+      const s = new Score();
+      const h = at(c, ["headBack"]);
+      if (!h.length || !feels(h, ["Shooting", "Stabbing", "Burning", "Sharp"])) return s;
+      located(s, h, 2);
+      s.add(3, "Shooting/electric pain at the back of the head");
+      return s;
+    },
+  },
+  {
+    id: "giant-cell-arteritis",
+    name: "Giant cell arteritis (must be ruled out)",
+    area: "Temples / head",
+    about: "Inflammation of the arteries in the head, almost only in people over 50: a new headache (often at the temples), scalp tenderness, jaw pain when chewing, feeling unwell, sometimes vision problems. Untreated it can cause sudden blindness.",
+    selfCare: ["Don't wait — needs same-day steroid treatment if suspected"],
+    seeDoctor: "Get seen today. Go to A&E immediately for any change in vision.",
+    urgency: "urgent",
+    score: (c) => {
+      const s = new Score();
+      const h = at(c, ["head", "headBack"]);
+      if (!h.length || c.q.age !== "60+") return s;
+      located(s, h, 1.5);
+      s.add(1.5, "New headache over 60");
+      if (c.q.duration === "days" || c.q.duration === "weeks") s.add(1.5, "Recent onset");
+      if (flag(c, "jaw")) s.add(3, "Jaw pain when chewing");
+      if (feels(h, ["Tender to touch"])) s.add(1.5, "Tender scalp");
+      return s;
+    },
+  },
+  {
+    id: "whiplash",
+    name: "Whiplash / neck sprain",
+    area: "Neck",
+    about: "A sudden jolt of the head — classically a rear-end car crash — strains the neck's muscles and ligaments, causing neck pain and stiffness that often comes on hours later, sometimes with headache and shoulder pain.",
+    selfCare: ["Keep the neck gently moving; avoid a soft collar", "Painkillers and heat", "Gradually return to normal activities"],
+    seeDoctor: "Urgently if you have numbness, weakness, severe pain, or were in a high-speed collision; otherwise if not improving in 2–3 weeks.",
+    urgency: "doctor",
+    muscles: ["scm", "trapezius", "neckExtensors"],
+    score: (c) => {
+      const s = new Score();
+      const n = at(c, ["neck", "neckFront"]);
+      if (!n.length || c.q.onset !== "injury") return s;
+      located(s, n, 2);
+      s.add(4, "Neck pain after an injury/jolt");
+      return s;
+    },
+  },
+  // ------------- shoulder & arm
+  {
+    id: "shoulder-dislocation",
+    name: "Shoulder dislocation or fracture",
+    area: "Shoulder",
+    about: "After a fall or forceful movement the ball of the shoulder can pop out of the socket or a bone can break. Severe pain, the arm held still, a squared-off or deformed shoulder.",
+    selfCare: ["Support the arm in a sling or against the body", "Don't try to put it back yourself"],
+    seeDoctor: "Go to A&E now.",
+    urgency: "urgent",
+    score: (c) => {
+      const s = new Score();
+      const sh = at(c, ["shoulder", "shoulderBack", "upperArm"]);
+      if (!sh.length || c.q.onset !== "injury") return s;
+      located(s, sh, 1.5);
+      if (flag(c, "deformity")) s.add(5, "Looks deformed");
+      if (flag(c, "cantBear")) s.add(3, "Can't use the arm");
+      if (peak(sh) >= 8) s.add(1.5, "Severe pain after injury");
+      return s;
+    },
+  },
+  {
+    id: "biceps-tendinopathy",
+    name: "Biceps tendinopathy",
+    area: "Front of shoulder",
+    about: "Irritation of the long biceps tendon in its groove at the front of the shoulder: aching at the front of the shoulder, worse lifting, carrying or reaching overhead.",
+    selfCare: ["Reduce lifting and overhead work", "Ice, painkillers, then gentle strengthening"],
+    seeDoctor: "If a sudden pop is followed by a bulge in the upper arm (rupture), or no better in 6 weeks.",
+    urgency: "selfcare",
+    muscles: ["biceps"],
+    score: (c) => {
+      const s = new Score();
+      const f = at(c, ["shoulder", "upperArm"]).filter((x) => x.source === "map");
+      if (!f.length) return s;
+      located(s, f, 2);
+      if (hasMuscle(f, ["biceps"])) s.add(2, "Over the biceps");
+      if (tagged(c.f, ["overhead", "grip"])) s.add(1.5, "Hurts lifting/reaching");
+      return s;
+    },
+  },
+  {
+    id: "calcific-tendinitis",
+    name: "Calcific tendinitis",
+    area: "Shoulder",
+    about: "Calcium deposits in a rotator-cuff tendon can suddenly become inflamed, causing very severe shoulder pain (often at night) that makes moving the arm almost impossible — without any injury.",
+    selfCare: ["Ice, anti-inflammatories if safe, rest the arm"],
+    seeDoctor: "See a GP; injections or other treatments work well.",
+    urgency: "doctor",
+    muscles: ["supraspinatus"],
+    score: (c) => {
+      const s = new Score();
+      const sh = at(c, ["shoulder", "shoulderBack"]);
+      if (!sh.length || peak(sh) < 7 || c.q.onset === "injury") return s;
+      located(s, sh, 1.5);
+      if (c.q.onset === "sudden" || c.q.onset === "woke") s.add(3, "Sudden severe pain without injury");
+      return s;
+    },
+  },
+  {
+    id: "olecranon-bursitis",
+    name: "Elbow bursitis",
+    area: "Point of the elbow",
+    about: "The fluid sac over the point of the elbow swells — a soft, squashy lump — after leaning on elbows, a knock, or sometimes gout or infection.",
+    selfCare: ["Avoid leaning on the elbow; pad it", "Ice and compression"],
+    seeDoctor: "Urgently if it's hot, red, very painful or you have a fever — it may be infected.",
+    urgency: "selfcare",
+    score: (c) => {
+      const s = new Score();
+      const e = at(c, ["elbowPoint"]);
+      if (!e.length || !(flag(c, "swollenJoint") || flag(c, "bulge"))) return s;
+      located(s, e, 2);
+      s.add(4, "Swelling over the point of the elbow");
+      if (flag(c, "fever")) s.add(1, "Fever — infection possible");
+      return s;
+    },
+  },
+  {
+    id: "cubital-tunnel",
+    name: "Ulnar nerve irritation (cubital tunnel)",
+    area: "Inner elbow & hand",
+    about: "Pressure on the 'funny bone' nerve at the inner elbow causes tingling and numbness in the ring and little fingers, worse with the elbow bent (phones, sleeping with arms bent), and later grip weakness.",
+    selfCare: ["Avoid leaning on the inner elbow and long periods with it bent", "Wrap a towel loosely around the elbow at night to keep it straighter"],
+    seeDoctor: "If symptoms are constant, you notice weakness or muscle wasting in the hand.",
+    urgency: "doctor",
+    score: (c) => {
+      const s = new Score();
+      const e = at(c, ["elbowInner", "elbowPoint", "forearmFlexor"]);
+      const hand = at(c, ["palm", "handBack", "wristPalm"]);
+      if (!e.length || !feels([...e, ...hand], NERVE)) return s;
+      located(s, e, 2);
+      s.add(2.5, "Tingling/numbness around the elbow");
+      if (hand.length) s.add(1.5, "Spreading into the hand");
+      if (med(e)) s.add(1, "Inner side of the elbow");
+      return s;
+    },
+  },
+  {
+    id: "trigger-finger",
+    name: "Trigger finger",
+    area: "Hand",
+    about: "A thickened finger tendon catches in its sheath, so the finger clicks, sticks or locks bent, with a tender lump in the palm at the base of the finger.",
+    selfCare: ["Rest from heavy gripping", "Gentle finger stretches; a night splint"],
+    seeDoctor: "A steroid injection or a small procedure usually fixes it.",
+    urgency: "selfcare",
+    score: (c) => {
+      const s = new Score();
+      const h = at(c, ["palm", "handBack"]);
+      if (!h.length || !flag(c, "locking")) return s;
+      located(s, h, 2);
+      s.add(4, "Finger catching or locking");
+      return s;
+    },
+  },
+  {
+    id: "ganglion",
+    name: "Ganglion cyst",
+    area: "Wrist",
+    about: "A harmless, smooth, fluid-filled lump, usually on the back of the wrist, that can ache or press on nearby structures. Often comes and goes.",
+    selfCare: ["Leave it alone if it isn't troubling you", "Don't try to burst it"],
+    seeDoctor: "If it's painful, growing, or you're not sure what the lump is.",
+    urgency: "selfcare",
+    score: (c) => {
+      const s = new Score();
+      const w = at(c, ["wristBack", "wristPalm", "handBack"]);
+      if (!w.length || !flag(c, "bulge")) return s;
+      located(s, w, 2);
+      s.add(4, "A lump at the wrist");
+      return s;
+    },
+  },
+  {
+    id: "scaphoid",
+    name: "Wrist sprain or scaphoid fracture",
+    area: "Wrist",
+    about: "A fall on an outstretched hand can sprain the wrist or crack the small scaphoid bone on the thumb side. Scaphoid fractures are easy to miss and can heal badly if not treated.",
+    selfCare: ["Support the wrist, ice, elevate"],
+    seeDoctor: "Get an X-ray (same day or next day), especially if it's tender at the base of the thumb.",
+    urgency: "urgent",
+    score: (c) => {
+      const s = new Score();
+      const w = at(c, ["wristPalm", "wristBack", "handBack", "palm"]);
+      if (!w.length || c.q.onset !== "injury") return s;
+      located(s, w, 2);
+      s.add(3, "Wrist pain after a fall/injury");
+      if (lat(w)) s.add(1.5, "Thumb side of the wrist");
+      return s;
+    },
+  },
+  // ------------- chest
+  {
+    id: "rib-injury",
+    name: "Bruised or cracked rib",
+    area: "Ribs",
+    about: "A knock or fall onto the chest — or even heavy coughing — can bruise or crack a rib: sharp, localised pain that's worse breathing in, coughing or moving.",
+    selfCare: ["Regular painkillers so you can breathe deeply and cough", "Take a few deep breaths every hour to prevent chest infection", "Hold a pillow against the chest to cough"],
+    seeDoctor: "Urgently if you're short of breath, coughing blood, or develop a fever.",
+    urgency: "doctor",
+    muscles: ["intercostals"],
+    score: (c) => {
+      const s = new Score();
+      const r = at(c, ["chest", "upperBack", "midBack", "abdUpper"]);
+      if (!r.length || c.q.onset !== "injury") return s;
+      located(s, r, 2);
+      if (flag(c, "breathing")) s.add(3, "Worse breathing in or coughing");
+      if (feels(r, SHARP)) s.add(1);
+      return s;
+    },
+  },
+  {
+    id: "shingles",
+    name: "Shingles",
+    area: "A band on one side",
+    about: "Reactivation of the chickenpox virus in a nerve: burning, tingling or stabbing pain in a strip on one side of the body, followed a few days later by a blistering rash in the same band.",
+    selfCare: ["Keep the rash clean and covered", "Painkillers, loose clothing", "Avoid contact with pregnant women and babies until blisters crust"],
+    seeDoctor: "See a GP within 3 days of the rash for antiviral treatment — urgently if it's near the eye.",
+    urgency: "doctor",
+    score: (c) => {
+      const s = new Score();
+      if (!flag(c, "rash") || !c.f.length) return s;
+      s.add(2, describe(c.f));
+      s.add(3, "Rash or blisters over the painful area");
+      if (feels(c.f, ["Burning", "Tingling / numb", "Shooting"])) s.add(2, "Burning/nerve-type pain");
+      if (sides(c.f) === 1) s.add(1, "One side only");
+      return s;
+    },
+  },
+  {
+    id: "pleurisy",
+    name: "Pleurisy or chest infection",
+    area: "Chest",
+    about: "Inflammation of the lining of the lungs — often with a chest infection — causes sharp chest or back pain that's worse breathing in or coughing, sometimes with fever, cough and breathlessness.",
+    selfCare: ["Rest, fluids, painkillers so you can breathe deeply"],
+    seeDoctor: "Get seen today, especially with fever, breathlessness or coughing up blood.",
+    urgency: "urgent",
+    muscles: ["intercostals"],
+    score: (c) => {
+      const s = new Score();
+      const r = at(c, ["chest", "upperBack", "midBack"]);
+      if (!r.length || !flag(c, "breathing") || c.q.onset === "injury") return s;
+      located(s, r, 2);
+      s.add(2.5, "Worse breathing in or coughing");
+      if (flag(c, "fever")) s.add(3, "Fever");
+      if (flag(c, "breath")) s.add(1.5, "Breathless");
+      return s;
+    },
+  },
+  {
+    id: "pulmonary-embolism",
+    name: "Blood clot in the lung (must be ruled out)",
+    area: "Chest",
+    about: "A clot (often from the leg) blocking a lung artery causes sudden breathlessness and sharp chest pain worse on breathing in, sometimes with a fast heartbeat, coughing blood or fainting.",
+    selfCare: ["This is an emergency"],
+    seeDoctor: "Call emergency services now.",
+    urgency: "emergency",
+    score: (c) => {
+      const s = new Score();
+      if (!flag(c, "breath")) return s;
+      const ch = at(c, ["chest", "upperBack"]);
+      if (!ch.length && !at(c, ["calf"]).length) return s;
+      if (ch.length) located(s, ch, 2);
+      if (flag(c, "breathing")) s.add(2, "Pain worse on breathing in");
+      if (at(c, ["calf"]).length || flag(c, "swelling")) s.add(4, "Leg pain or swelling too");
+      s.add(1.5, "Breathlessness");
+      return s;
+    },
+  },
+  // ------------- abdomen & pelvis
+  {
+    id: "diverticulitis",
+    name: "Diverticulitis",
+    area: "Lower left abdomen",
+    about: "Inflamed or infected pouches in the bowel wall — usually over 40 — causing constant pain in the lower left abdomen, often with fever, feeling sick and a change in bowel habit.",
+    selfCare: ["Clear fluids and rest while waiting to be seen"],
+    seeDoctor: "See a doctor today if you have fever or severe pain; urgent care for bleeding or worsening pain.",
+    urgency: "urgent",
+    score: (c) => {
+      const s = new Score();
+      const ll = at(c, ["abdLower"], "Left");
+      if (!ll.length) return s;
+      located(s, ll, 2.5);
+      if (older(c)) s.add(1.5, "Common over 40");
+      if (flag(c, "fever")) s.add(2.5, "Fever");
+      if (feels(ll, ["Aching", "Cramping", "Tender to touch"])) s.add(1);
+      return s;
+    },
+  },
+  {
+    id: "peptic-ulcer",
+    name: "Stomach or duodenal ulcer",
+    area: "Upper abdomen",
+    about: "A sore in the stomach lining (often from H. pylori bacteria or anti-inflammatory painkillers) causing burning or gnawing upper-abdominal pain, sometimes eased or worsened by eating.",
+    selfCare: ["Avoid ibuprofen, aspirin and alcohol", "Antacids for short-term relief"],
+    seeDoctor: "See a GP for testing and treatment. Go urgently for black stools, vomiting blood, or sudden severe pain.",
+    urgency: "doctor",
+    score: (c) => {
+      const s = new Score();
+      const u = at(c, ["abdUpper"]);
+      if (!u.length) return s;
+      located(s, u, 2);
+      if (feels(u, ["Burning", "Aching"])) s.add(2, "Burning/gnawing pain");
+      if (c.q.duration === "weeks" || c.q.duration === "months") s.add(1, "Ongoing");
+      return s;
+    },
+  },
+  {
+    id: "pancreatitis",
+    name: "Pancreatitis (must be ruled out)",
+    area: "Upper abdomen & back",
+    about: "Inflammation of the pancreas — often due to gallstones or alcohol — causing severe, constant upper-abdominal pain that bores through to the back, with vomiting.",
+    selfCare: ["Don't eat or drink alcohol; seek care"],
+    seeDoctor: "Go to A&E / urgent care now.",
+    urgency: "urgent",
+    score: (c) => {
+      const s = new Score();
+      const u = at(c, ["abdUpper"]);
+      if (!u.length || peak(u) < 7) return s;
+      located(s, u, 2);
+      if (at(c, ["midBack", "upperBack"]).length) s.add(3, "Boring through to the back");
+      s.add(1, "Severe upper-abdominal pain");
+      return s;
+    },
+  },
+  {
+    id: "uti",
+    name: "Urinary tract infection (cystitis)",
+    area: "Lower abdomen",
+    about: "A bladder infection causing burning when passing urine, needing to go often and urgently, and lower-tummy aching. Much more common in women.",
+    selfCare: ["Drink plenty of water", "Paracetamol or ibuprofen"],
+    seeDoctor: "See a GP or pharmacist — antibiotics may be needed. Urgently if you have fever, back/flank pain or are pregnant.",
+    urgency: "doctor",
+    score: (c) => {
+      const s = new Score();
+      if (!flag(c, "urine")) return s;
+      const p = at(c, ["abdLower", "groin"]);
+      if (p.length) located(s, p, 2);
+      s.add(4.5, "Burning or frequent urination");
+      if (c.q.sex === "female") s.add(0.5);
+      return s;
+    },
+  },
+  {
+    id: "testicular-torsion",
+    name: "Testicular torsion (emergency)",
+    area: "Groin",
+    about: "A twisted testicle cuts off its own blood supply: sudden severe pain in the testicle, groin or lower abdomen, often with nausea. Most common in teenagers and young men. Surgery within hours saves the testicle.",
+    selfCare: ["This is an emergency — don't wait"],
+    seeDoctor: "Go to A&E immediately.",
+    urgency: "emergency",
+    score: (c) => {
+      const s = new Score();
+      if (c.q.sex !== "male") return s;
+      const g = at(c, ["groin"]);
+      if (!g.length || c.q.onset !== "sudden" || peak(g) < 6) return s;
+      located(s, g, 3);
+      s.add(4, "Sudden severe groin pain");
+      if (younger(c)) s.add(1.5, "Most common in younger males");
+      return s;
+    },
+  },
+  {
+    id: "ectopic-ovarian",
+    name: "Ectopic pregnancy or ovarian torsion (must be ruled out)",
+    area: "Lower abdomen (one side)",
+    about: "Sudden, severe one-sided lower-abdominal or pelvic pain in someone who could be pregnant may be an ectopic pregnancy; a twisted ovary causes similar pain with vomiting. Both are emergencies.",
+    selfCare: ["Do a pregnancy test if possible, but don't delay getting help"],
+    seeDoctor: "Go to A&E now, especially with dizziness, fainting or shoulder-tip pain.",
+    urgency: "emergency",
+    score: (c) => {
+      const s = new Score();
+      if (c.q.sex !== "female" || c.q.age === "60+") return s;
+      const p = at(c, ["abdLower", "groin"]).filter((x) => x.side);
+      if (!p.length || c.q.onset !== "sudden" || peak(p) < 7) return s;
+      located(s, p, 2.5);
+      s.add(3, "Sudden severe one-sided pelvic pain");
+      return s;
+    },
+  },
+  {
+    id: "hernia-abdominal",
+    name: "Abdominal wall hernia",
+    area: "Abdomen",
+    about: "A bulge through a weak spot in the abdominal wall — around the belly button or an old scar — that aches, especially when lifting, coughing or standing.",
+    selfCare: ["Avoid heavy lifting and straining until assessed"],
+    seeDoctor: "See a GP. Go urgently if it becomes hard, very painful, red, or you start vomiting.",
+    urgency: "doctor",
+    score: (c) => {
+      const s = new Score();
+      const a = at(c, ["abdUpper", "abdLower"]);
+      if (!a.length || !flag(c, "bulge")) return s;
+      located(s, a, 2);
+      s.add(4, "A bulge in the tummy wall");
+      return s;
+    },
+  },
+  {
+    id: "gastroenteritis",
+    name: "Gastroenteritis (stomach bug)",
+    area: "Abdomen",
+    about: "A viral or food-related infection causing crampy tummy pain, diarrhoea and/or vomiting, sometimes with a mild fever. Usually settles within a few days.",
+    selfCare: ["Small, frequent sips of fluid or rehydration solution", "Rest; eat bland food when you feel able", "Wash hands to avoid spreading it"],
+    seeDoctor: "If you can't keep fluids down, have blood in vomit or stools, severe pain, or it lasts more than a week.",
+    urgency: "selfcare",
+    score: (c) => {
+      const s = new Score();
+      const a = at(c, ["abdLower", "abdUpper"]);
+      if (!a.length || !flag(c, "fever")) return s;
+      located(s, a, 1.5);
+      if (feels(a, ["Cramping"])) s.add(2.5, "Crampy pain");
+      if (sides(a) > 1) s.add(1, "Spread across the tummy");
+      s.add(1, "Fever");
+      return s;
+    },
+  },
+  // ------------- back
+  {
+    id: "disc-herniation",
+    name: "Lumbar disc bulge",
+    area: "Lower back",
+    about: "A bulging disc between the vertebrae can cause deep central low-back pain, worse sitting, bending forward, coughing or sneezing — and may irritate a nerve to cause sciatica.",
+    selfCare: ["Walk little and often; limit long sitting", "Lie on your front or back with knees bent for relief", "Avoid heavy lifting for a few weeks"],
+    seeDoctor: "If pain spreads below the knee with numbness/weakness, or isn't improving in 4–6 weeks. Emergency for bladder/bowel changes.",
+    urgency: "doctor",
+    score: (c) => {
+      const s = new Score();
+      const b = at(c, ["lowBack", "sacrum"]);
+      if (!b.length) return s;
+      located(s, b, 1.5);
+      if (flag(c, "sitting")) s.add(2, "Worse sitting");
+      if (tagged(b, ["flexion"])) s.add(1.5, "Worse bending forward");
+      if (flag(c, "breathing")) s.add(1, "Worse coughing");
+      return s;
+    },
+  },
+  {
+    id: "spinal-stenosis",
+    name: "Lumbar spinal stenosis",
+    area: "Lower back & legs",
+    about: "Age-related narrowing of the spinal canal squeezes the nerves, causing heaviness, aching or tingling in the buttocks and legs when standing or walking, eased by sitting or leaning forward (pushing a trolley helps).",
+    selfCare: ["Exercise that bends you forward (cycling) is often easier", "Use a walking aid or rest breaks"],
+    seeDoctor: "See a GP for assessment; urgently with leg weakness or bladder/bowel changes.",
+    urgency: "doctor",
+    score: (c) => {
+      const s = new Score();
+      if (!older(c)) return s;
+      const b = at(c, ["lowBack", "buttock", "hamstring", "calf", "thighFront"]);
+      if (!b.length || !flag(c, "walking")) return s;
+      located(s, b, 2);
+      s.add(3.5, "Leg symptoms with walking, eased by rest");
+      if (c.q.age === "60+") s.add(1.5, "Most common over 60");
+      return s;
+    },
+  },
+  {
+    id: "axial-spa",
+    name: "Inflammatory back pain (axial spondyloarthritis)",
+    area: "Lower back & buttocks",
+    about: "An inflammatory condition starting before 45: low-back and buttock pain with marked morning stiffness lasting over 30–60 minutes, better with exercise and worse with rest, often waking you in the second half of the night.",
+    selfCare: ["Daily stretching and exercise help a lot"],
+    seeDoctor: "See a GP and ask about a rheumatology referral — effective treatments exist.",
+    urgency: "doctor",
+    score: (c) => {
+      const s = new Score();
+      const b = at(c, ["lowBack", "sacrum", "buttock"]);
+      if (!b.length || !flag(c, "morningStiff")) return s;
+      located(s, b, 2);
+      s.add(3, "Long morning stiffness");
+      if (younger(c)) s.add(1.5, "Usually starts before 45");
+      if (c.q.duration === "months") s.add(1.5, "Lasting months");
+      if (flag(c, "sitting")) s.add(1, "Better with movement");
+      return s;
+    },
+  },
+  {
+    id: "compression-fracture",
+    name: "Spinal compression fracture",
+    area: "Mid / low back",
+    about: "In people with thin bones (osteoporosis), a vertebra can collapse after a minor fall, lifting or even coughing, causing sudden sharp back pain that's worse standing and moving.",
+    selfCare: ["Painkillers and gentle movement; avoid lifting"],
+    seeDoctor: "See a doctor promptly for an X-ray and bone health check.",
+    urgency: "doctor",
+    score: (c) => {
+      const s = new Score();
+      const b = at(c, ["midBack", "lowBack", "upperBack"]);
+      if (!b.length || c.q.age !== "60+") return s;
+      located(s, b, 1.5);
+      if (c.q.onset === "sudden" || c.q.onset === "injury") s.add(3, "Sudden onset at an older age");
+      if (c.q.sex === "female") s.add(1, "Osteoporosis is more common in women");
+      return s;
+    },
+  },
+  {
+    id: "facet-joint",
+    name: "Facet joint pain",
+    area: "Lower back",
+    about: "The small joints at the back of the spine can become irritated or arthritic, causing aching just to one or both sides of the spine, worse leaning back, twisting or standing for long, and stiff in the morning.",
+    selfCare: ["Knee-to-chest and gentle flexion stretches", "Heat; avoid long standing and arching back"],
+    seeDoctor: "If it persists beyond 6 weeks despite exercise.",
+    urgency: "selfcare",
+    muscles: ["erectorSpinae", "quadratusLumborum"],
+    score: (c) => {
+      const s = new Score();
+      const b = at(c, ["lowBack"]);
+      if (!b.length) return s;
+      located(s, b, 1.5);
+      if (tagged(b, ["extension", "twist"])) s.add(3, "Worse leaning back or twisting");
+      if (older(c)) s.add(0.5);
+      return s;
+    },
+  },
+  {
+    id: "coccydynia",
+    name: "Tailbone pain (coccydynia)",
+    area: "Tailbone",
+    about: "Pain at the very bottom of the spine, worse sitting (especially leaning back) and standing up from sitting. Often after a fall onto the bottom, childbirth, or long sitting on hard seats.",
+    selfCare: ["Wedge or U-shaped cushion", "Lean forward when sitting; avoid hard seats", "Painkillers, ice or heat"],
+    seeDoctor: "If it lasts more than a few weeks or follows a hard fall.",
+    urgency: "selfcare",
+    muscles: ["gluteMax"],
+    score: (c) => {
+      const s = new Score();
+      const t = at(c, ["sacrum"]);
+      if (!t.length) return s;
+      located(s, t, 2);
+      if (flag(c, "sitting")) s.add(3, "Worse sitting");
+      if (c.q.onset === "injury") s.add(1.5, "After a fall");
+      return s;
+    },
+  },
+  // ------------- hip
+  {
+    id: "hip-labral",
+    name: "Hip labral tear / impingement (FAI)",
+    area: "Groin / front of hip",
+    about: "In active younger adults, extra bone at the hip joint or a tear of the cartilage rim causes deep groin pain with clicking or catching, worse sitting low, squatting, or bringing the knee to the chest.",
+    selfCare: ["Avoid deep squats and long low sitting", "Physio-led hip strengthening"],
+    seeDoctor: "See a GP or sports physio if it's persistent or catching.",
+    urgency: "doctor",
+    score: (c) => {
+      const s = new Score();
+      const h = at(c, ["groin", "hip"]);
+      if (!h.length) return s;
+      located(s, h, 1.5);
+      if (flag(c, "locking")) s.add(2.5, "Clicking or catching");
+      if (tagged(c.f, ["hipFlex", "kneeLoad"])) s.add(1.5, "Hurts with deep hip bending");
+      if (younger(c)) s.add(1, "Common in active younger adults");
+      return s;
+    },
+  },
+  {
+    id: "hip-fracture",
+    name: "Hip fracture (must be ruled out)",
+    area: "Hip / groin",
+    about: "In older adults, a fall onto the hip can break the top of the thigh bone: groin or hip pain, difficulty or inability to walk, and sometimes a shortened, outward-turned leg.",
+    selfCare: ["Don't try to walk on it; keep warm and still"],
+    seeDoctor: "Call an ambulance / go to A&E.",
+    urgency: "urgent",
+    score: (c) => {
+      const s = new Score();
+      const h = at(c, ["hip", "groin", "thighFront", "buttock"]);
+      if (!h.length || c.q.onset !== "injury" || !older(c)) return s;
+      located(s, h, 2);
+      if (c.q.age === "60+") s.add(2, "Fall at an older age");
+      if (flag(c, "cantBear")) s.add(4, "Can't bear weight");
+      return s;
+    },
+  },
+  // ------------- knee
+  {
+    id: "acl",
+    name: "ACL (cruciate ligament) injury",
+    area: "Knee",
+    about: "A twisting injury — often landing or changing direction in sport — with a pop, rapid swelling within hours, and the knee feeling unstable or giving way.",
+    selfCare: ["Rest, ice, compression, elevation", "Crutches if it hurts to walk"],
+    seeDoctor: "See a doctor or sports physio within days; urgently if the knee is locked or very swollen.",
+    urgency: "doctor",
+    score: (c) => {
+      const s = new Score();
+      const k = at(c, ["kneecap", "kneeBack"]);
+      if (!k.length || c.q.onset !== "injury") return s;
+      located(s, k, 1.5);
+      if (flag(c, "pop")) s.add(3, "Felt a pop");
+      if (flag(c, "swollenJoint")) s.add(2, "Swelling");
+      if (flag(c, "locking")) s.add(1.5, "Gives way");
+      return s;
+    },
+  },
+  {
+    id: "mcl",
+    name: "MCL (inner knee ligament) sprain",
+    area: "Inner knee",
+    about: "A blow to the outside of the knee or a twist stretches the ligament on the inner side, causing inner-knee pain and tenderness along the joint.",
+    selfCare: ["Rest, ice, compression; a hinged brace for bigger sprains", "Gentle bending and straightening as pain allows"],
+    seeDoctor: "If you can't bear weight, it's very unstable, or not improving in 2–3 weeks.",
+    urgency: "selfcare",
+    score: (c) => {
+      const s = new Score();
+      const k = at(c, ["kneecap"]);
+      if (!k.length || c.q.onset !== "injury" || !med(k)) return s;
+      located(s, k, 2);
+      s.add(3, "Inner-knee pain after an injury");
+      return s;
+    },
+  },
+  {
+    id: "patellar-tendinopathy",
+    name: "Patellar tendinopathy (jumper's knee)",
+    area: "Below the kneecap",
+    about: "Overload of the tendon just below the kneecap causes pain there, worse jumping, squatting, stairs and after sitting. Common in basketball, volleyball and running.",
+    selfCare: ["Reduce jumping and deep squats", "Isometric wall sits (hold 30–45 s, ×5) for pain relief", "Patellar strap; slow, heavy strengthening"],
+    seeDoctor: "If no better after 6–12 weeks of load management.",
+    urgency: "selfcare",
+    muscles: ["patellarTendon", "rectusFemoris"],
+    score: (c) => {
+      const s = new Score();
+      const k = at(c, ["kneecap"]).filter((x) => x.source === "map");
+      if (!k.length || !low(k)) return s;
+      located(s, k, 2);
+      s.add(3.5, "Just below the kneecap");
+      if (tagged(c.f, ["kneeLoad"]) || flag(c, "running")) s.add(2, "Loading the knee hurts");
+      if (c.q.age === "u18") s.points -= 1;
+      return s;
+    },
+  },
+  {
+    id: "osgood",
+    name: "Osgood-Schlatter disease",
+    area: "Below the kneecap",
+    about: "In active children and teenagers during growth spurts, the tendon pulls on the growth plate just below the knee, causing a tender, sometimes bony bump that hurts with running, jumping and kneeling.",
+    selfCare: ["Reduce running/jumping to a tolerable level", "Ice after sport; knee pads for kneeling", "Quad and hamstring stretches"],
+    seeDoctor: "If it's very painful, swollen, or the knee locks or gives way.",
+    urgency: "selfcare",
+    muscles: ["patellarTendon"],
+    score: (c) => {
+      const s = new Score();
+      const k = at(c, ["kneecap"]);
+      if (!k.length || c.q.age !== "u18" || !low(k)) return s;
+      located(s, k, 2);
+      s.add(4, "Below the kneecap in a young person");
+      return s;
+    },
+  },
+  {
+    id: "itb-syndrome",
+    name: "Iliotibial band syndrome",
+    area: "Outer knee",
+    about: "Friction and compression where the IT band crosses the outer knee causes sharp outer-knee pain during running — often starting at a predictable distance, and worse downhill.",
+    selfCare: ["Reduce running distance and downhill running", "Hip/glute strengthening (side planks, clams)", "Foam roll the outer thigh muscles gently"],
+    seeDoctor: "If it doesn't improve after 4–6 weeks of changes.",
+    urgency: "selfcare",
+    muscles: ["itBand", "tfl", "gluteMed"],
+    score: (c) => {
+      const s = new Score();
+      const k = at(c, ["kneecap", "thighFront", "hamstring"]);
+      if (!k.length) return s;
+      const outer = k.filter((x) => x.lateral || x.muscles.includes("itBand"));
+      if (!outer.length) return s;
+      located(s, outer, 2);
+      s.add(2.5, "Outer side of the knee/thigh");
+      if (flag(c, "running")) s.add(2, "Started with running");
+      return s;
+    },
+  },
+  {
+    id: "pes-anserine-bursitis",
+    name: "Pes anserine bursitis",
+    area: "Inner knee",
+    about: "Inflammation of the tendons/bursa on the inner side of the shin just below the knee causes inner-knee tenderness, worse on stairs, standing up and at night. Common with knee arthritis and in runners.",
+    selfCare: ["Ice, pillow between the knees in bed", "Hamstring and quad stretches; reduce stairs"],
+    seeDoctor: "If no better in 4–6 weeks; injections can help.",
+    urgency: "selfcare",
+    muscles: ["pesAnserine", "hamstringMedial", "sartorius"],
+    score: (c) => {
+      const s = new Score();
+      const k = at(c, ["kneecap"]).filter((x) => x.source === "map");
+      if (!k.length || !med(k)) return s;
+      located(s, k, 2);
+      s.add(2, "Inner side of the knee");
+      if (low(k)) s.add(1.5, "Just below the joint");
+      if (older(c)) s.add(1);
+      if (c.q.onset === "injury") s.points -= 2;
+      return s;
+    },
+  },
+  {
+    id: "prepatellar-bursitis",
+    name: "Kneecap bursitis (housemaid's knee)",
+    area: "Front of knee",
+    about: "Swelling of the fluid sac in front of the kneecap from kneeling or a knock — a soft swelling over the kneecap that's sore to kneel on.",
+    selfCare: ["Avoid kneeling; use knee pads", "Ice and compression"],
+    seeDoctor: "Urgently if it's hot, red and you feel unwell — it may be infected.",
+    urgency: "selfcare",
+    score: (c) => {
+      const s = new Score();
+      const k = at(c, ["kneecap"]);
+      if (!k.length || !(flag(c, "bulge") || flag(c, "swollenJoint"))) return s;
+      located(s, k, 2);
+      s.add(3, "Swelling over the kneecap");
+      return s;
+    },
+  },
+  {
+    id: "septic-arthritis",
+    name: "Infected or acutely inflamed joint (must be ruled out)",
+    area: "A single joint",
+    about: "A hot, swollen, very painful joint with fever can be a joint infection — a medical emergency that can destroy the joint within days. Gout can look similar.",
+    selfCare: ["Don't wait it out"],
+    seeDoctor: "Go to A&E / urgent care today.",
+    urgency: "urgent",
+    score: (c) => {
+      const s = new Score();
+      if (!flag(c, "swollenJoint") || !flag(c, "fever")) return s;
+      const j = at(c, ["kneecap", "kneeBack", "ankle", "hip", "groin", "elbowPoint", "elbowInner", "wristPalm", "wristBack", "shoulder", "footTop"]);
+      if (!j.length) return s;
+      located(s, j, 2);
+      s.add(6, "Swollen joint with fever");
+      return s;
+    },
+  },
+  // ------------- lower leg & foot
+  {
+    id: "stress-fracture",
+    name: "Stress fracture",
+    area: "Shin / foot",
+    about: "A tiny crack in a bone from repeated loading — after a jump in running or marching. Pinpoint bone pain that worsens with activity and later at rest or at night.",
+    selfCare: ["Stop the impact activity; switch to cycling or swimming"],
+    seeDoctor: "See a doctor for imaging — continuing to run can make it worse.",
+    urgency: "doctor",
+    score: (c) => {
+      const s = new Score();
+      const b = at(c, ["shin", "footTop", "heel"]);
+      if (!b.length || !(flag(c, "running") || c.q.onset === "gradual")) return s;
+      located(s, b, 1.5);
+      if (feels(b, ["Tender to touch"])) s.add(1.5, "Pinpoint tenderness");
+      if (flag(c, "running")) s.add(1.5, "After more running/exercise");
+      if (peak(b) >= 6) s.add(1, "Significant pain");
+      return s;
+    },
+  },
+  {
+    id: "compartment",
+    name: "Compartment syndrome (must be ruled out)",
+    area: "Lower leg / forearm",
+    about: "After a crush, fracture or tight cast, rising pressure inside a muscle compartment causes severe pain out of proportion to the injury, a tight swollen limb and pain on stretching the muscles. Needs emergency surgery.",
+    selfCare: ["Loosen anything tight; don't elevate high"],
+    seeDoctor: "Go to A&E immediately.",
+    urgency: "emergency",
+    score: (c) => {
+      const s = new Score();
+      const l = at(c, ["shin", "calf", "forearmFlexor", "forearmExtensor", "thighFront"]);
+      if (!l.length || c.q.onset !== "injury" || peak(l) < 9 || !flag(c, "swelling")) return s;
+      located(s, l, 2);
+      s.add(5, "Severe pain and swelling after an injury");
+      return s;
+    },
+  },
+  {
+    id: "cramps",
+    name: "Muscle cramps",
+    area: "Calf / foot / thigh",
+    about: "Sudden, painful tightening of a muscle — often the calf at night — lasting seconds to minutes. Linked to exercise, dehydration, pregnancy, some medicines and age.",
+    selfCare: ["Stretch the muscle (pull toes towards you) and massage", "Calf stretches before bed; stay hydrated"],
+    seeDoctor: "If frequent, severe, or with swelling, numbness or weakness.",
+    urgency: "selfcare",
+    muscles: ["gastrocnemius", "hamstringLateral"],
+    score: (c) => {
+      const s = new Score();
+      const m = at(c, ["calf", "hamstring", "footTop", "heel", "thighFront"]);
+      if (!m.length || !feels(m, ["Cramping"])) return s;
+      located(s, m, 2);
+      s.add(3, "Cramping quality");
+      return s;
+    },
+  },
+  {
+    id: "claudication",
+    name: "Poor leg circulation (claudication)",
+    area: "Calf / buttock",
+    about: "Narrowed leg arteries (peripheral arterial disease) cause cramping calf, thigh or buttock pain when walking that goes away with a few minutes' rest. Smoking and diabetes are major risks.",
+    selfCare: ["Stop smoking; supervised walking exercise helps a lot"],
+    seeDoctor: "See a GP for checks (pulses, blood pressure, cholesterol, sugar). Urgently if the foot is cold, pale, numb or painful at rest.",
+    urgency: "doctor",
+    score: (c) => {
+      const s = new Score();
+      const l = at(c, ["calf", "buttock", "hamstring", "thighFront"]);
+      if (!l.length || !flag(c, "walking")) return s;
+      located(s, l, 2);
+      s.add(3, "Pain walking, eased by rest");
+      if (at(c, ["calf"]).length) s.add(1, "In the calf");
+      if (older(c)) s.add(1);
+      return s;
+    },
+  },
+  {
+    id: "achilles-rupture",
+    name: "Achilles tendon rupture",
+    area: "Back of ankle",
+    about: "A sudden snap at the back of the ankle — like being kicked — during push-off, then weakness pushing up on tiptoe and walking flat-footed. Most common in 30–50-year-old weekend athletes.",
+    selfCare: ["Don't walk on it more than necessary; point the toes down"],
+    seeDoctor: "Go to A&E / urgent care today.",
+    urgency: "urgent",
+    muscles: ["achillesTendon", "gastrocnemius"],
+    score: (c) => {
+      const s = new Score();
+      const a = at(c, ["achilles", "calf", "heel"]);
+      if (!a.length || !flag(c, "pop")) return s;
+      located(s, a, 2);
+      s.add(5, "Felt a snap at the back of the leg");
+      return s;
+    },
+  },
+  {
+    id: "mortons-neuroma",
+    name: "Morton's neuroma",
+    area: "Ball of the foot / toes",
+    about: "A thickened nerve between the toes (usually 3rd and 4th) causes burning, tingling or the feeling of standing on a pebble, worse in tight or high-heeled shoes.",
+    selfCare: ["Wide, low-heeled shoes", "Metatarsal pads; rest and massage the foot"],
+    seeDoctor: "If it persists — injections or insoles can help.",
+    urgency: "selfcare",
+    score: (c) => {
+      const s = new Score();
+      const f = at(c, ["footTop"]);
+      if (!f.length || !feels(f, NERVE)) return s;
+      located(s, f, 2);
+      s.add(3, "Burning/tingling in the forefoot");
+      if (sides(f) === 1) s.add(1, "One foot");
+      return s;
+    },
+  },
+  {
+    id: "bunion",
+    name: "Bunion (hallux valgus)",
+    area: "Big toe",
+    about: "The big toe angles towards the others and a bony bump forms on the inner side of the foot, which rubs in shoes and can ache.",
+    selfCare: ["Wide shoes with a deep toe box", "Bunion pads; toe spacers"],
+    seeDoctor: "If pain stops you walking comfortably despite footwear changes.",
+    urgency: "selfcare",
+    score: (c) => {
+      const s = new Score();
+      const f = at(c, ["footTop"]);
+      if (!f.length || !flag(c, "bulge")) return s;
+      located(s, f, 2);
+      s.add(2.5, "A bump on the foot");
+      if (med(f)) s.add(1.5, "Inner side (big-toe side)");
+      return s;
+    },
+  },
+  {
+    id: "severs",
+    name: "Sever's disease",
+    area: "Heel",
+    about: "Heel pain in active children aged about 8–14: irritation of the heel's growth plate, worse with running and jumping.",
+    selfCare: ["Reduce running/jumping", "Heel cushions, calf stretches, ice after sport"],
+    seeDoctor: "If pain is severe, at night, or with swelling or a limp.",
+    urgency: "selfcare",
+    muscles: ["achillesTendon"],
+    score: (c) => {
+      const s = new Score();
+      const h = at(c, ["heel", "achilles"]);
+      if (!h.length || c.q.age !== "u18") return s;
+      located(s, h, 2);
+      s.add(4, "Heel pain in a young person");
+      return s;
+    },
+  },
+  {
+    id: "tarsal-tunnel",
+    name: "Tarsal tunnel syndrome",
+    area: "Inner ankle & sole",
+    about: "Compression of the nerve behind the inner ankle bone causes burning, tingling or numbness on the sole and inner ankle, worse standing or walking for long.",
+    selfCare: ["Supportive shoes or insoles", "Rest and ice"],
+    seeDoctor: "If symptoms persist or you notice numbness or weakness.",
+    urgency: "doctor",
+    score: (c) => {
+      const s = new Score();
+      const a = at(c, ["ankle", "achilles", "heel"]);
+      if (!a.length || !feels(a, NERVE)) return s;
+      located(s, a, 2);
+      s.add(2.5, "Burning/tingling around the ankle or sole");
+      if (med(a)) s.add(1.5, "Inner side of the ankle");
+      return s;
+    },
+  },
+  // ------------- whole body
+  {
+    id: "pmr",
+    name: "Polymyalgia rheumatica",
+    area: "Shoulders & hips",
+    about: "An inflammatory condition in people over 50 causing pain and marked stiffness in both shoulders and upper arms, and often hips and thighs — worst in the morning — sometimes with tiredness and low mood. Responds dramatically to steroids.",
+    selfCare: ["Keep moving gently"],
+    seeDoctor: "See a GP soon for blood tests. Same day if you also have headache, jaw pain or vision problems.",
+    urgency: "doctor",
+    score: (c) => {
+      const s = new Score();
+      if (!older(c)) return s;
+      const sh = at(c, ["shoulder", "shoulderBack", "upperArm", "upperArmBack", "neck"]);
+      const hp = at(c, ["hip", "buttock", "thighFront", "groin"]);
+      if (!sh.length) return s;
+      located(s, sh, 1.5);
+      if (sides(sh) > 1) s.add(2, "Both shoulders");
+      if (hp.length) s.add(1.5, "Hips/thighs too");
+      if (flag(c, "morningStiff")) s.add(3, "Long morning stiffness");
+      if (c.q.age === "60+") s.add(1);
+      return s;
+    },
+  },
+  {
+    id: "rheumatoid",
+    name: "Rheumatoid or inflammatory arthritis",
+    area: "Hands, wrists & feet",
+    about: "An autoimmune arthritis causing painful, swollen, stiff joints — typically the small joints of both hands, wrists and feet — with morning stiffness over an hour and tiredness. Early treatment prevents joint damage.",
+    selfCare: ["Keep joints moving; warm water for morning stiffness"],
+    seeDoctor: "See a GP soon for blood tests and a rheumatology referral.",
+    urgency: "doctor",
+    score: (c) => {
+      const s = new Score();
+      const j = at(c, ["palm", "handBack", "wristPalm", "wristBack", "footTop", "ankle"]);
+      if (!j.length) return s;
+      located(s, j, 1.5);
+      if (sides(j) > 1) s.add(2, "Both sides of the body");
+      if (flag(c, "morningStiff")) s.add(2.5, "Long morning stiffness");
+      if (flag(c, "swollenJoint")) s.add(2, "Swollen joints");
+      return s;
+    },
+  },
+  {
+    id: "viral-myalgia",
+    name: "Viral illness (flu-like aches)",
+    area: "Many areas",
+    about: "Flu, COVID and other viral infections commonly cause aching muscles in many places, with fever, tiredness and headache. Usually settles within a week.",
+    selfCare: ["Rest, fluids, paracetamol or ibuprofen", "Stay home to avoid spreading it"],
+    seeDoctor: "If you're breathless, very unwell, have a stiff neck or rash, or aren't improving after a week.",
+    urgency: "selfcare",
+    score: (c) => {
+      const s = new Score();
+      if (!flag(c, "fever")) return s;
+      const locs = new Set(c.f.map((x) => x.loc));
+      if (locs.size < 3) return s;
+      s.add(2 + locs.size * 0.5, `Aches in ${locs.size} areas with fever`);
+      if (feels(c.f, ["Aching"])) s.add(1);
+      return s;
+    },
+  },
+];
+
+for (const cond of CONDITIONS) if (!cond.muscles && MUSCLE_FOR[cond.id]) cond.muscles = MUSCLE_FOR[cond.id];
+
+export const ALL_CONDITIONS: Condition[] = [...CONDITIONS, ...MORE];
+
 // ---------------------------------------------------------------- triage
 
 export type Triage = { level: Urgency; title: string; message: string; reasons: string[] };
@@ -1118,6 +2220,22 @@ export function triage(findings: Finding[], q: Intake): Triage {
   if (peak(at(c, ["midBack"]).filter((x) => x.side)) >= 7 && feels(at(c, ["midBack"]), COLICKY))
     raise("urgent", "Severe colicky flank pain — possible kidney stone");
 
+  if (q.sex === "male" && q.onset === "sudden" && peak(at(c, ["groin"])) >= 6)
+    raise("emergency", "Sudden severe groin pain in a male can be testicular torsion — needs surgery within hours");
+  if (q.sex === "female" && q.age !== "60+" && q.onset === "sudden" && peak(at(c, ["abdLower", "groin"]).filter((x) => x.side)) >= 7)
+    raise("emergency", "Sudden severe one-sided pelvic pain can be an ectopic pregnancy or twisted ovary");
+  if (flag(c, "swollenJoint") && flag(c, "fever")) raise("urgent", "A swollen joint with fever may be infected");
+  if (q.age === "60+" && has(["head", "headBack"]) && (flag(c, "jaw") || q.duration === "days"))
+    raise("urgent", "A new headache over 60 (especially with jaw pain) needs same-day checks for giant cell arteritis");
+  if (flag(c, "pop") && has(["achilles", "calf", "heel"])) raise("urgent", "A snap at the back of the ankle may be an Achilles rupture");
+  if (flag(c, "fever") && flag(c, "breathing") && has(["chest", "upperBack", "midBack"]))
+    raise("urgent", "Chest pain on breathing with fever may be a chest infection or pleurisy");
+  if (q.onset === "injury" && (flag(c, "pop") || flag(c, "swollenJoint") || flag(c, "locking")))
+    raise("doctor", "A pop, swelling or giving way after an injury suggests a ligament or cartilage tear");
+  if (flag(c, "urine")) raise("doctor", "Urinary symptoms may need a urine test and antibiotics");
+  if (flag(c, "morningStiff")) raise("doctor", "Prolonged morning stiffness can mean an inflammatory condition");
+  if (flag(c, "walking")) raise("doctor", "Leg pain on walking should be checked (circulation or spinal narrowing)");
+  if (flag(c, "rash")) raise("doctor", "A painful rash may be shingles — antivirals work best within 3 days");
   if (flag(c, "weightLoss")) raise("doctor", "Weight loss or night pain should be investigated");
   if (q.duration === "months") raise("doctor", "Pain lasting months deserves a proper assessment");
   if (peak(findings) >= 8) raise("doctor", "Severe pain");
@@ -1132,19 +2250,20 @@ export function triage(findings: Finding[], q: Intake): Triage {
   return { level, title: copy[level][0], message: copy[level][1], reasons };
 }
 
-export type Result = { condition: Condition; score: number; pct: number; why: string[] };
+export type Result = { condition: Condition; score: number; pct: number; why: string[]; muscles: string[] };
 
 export function assess(markers: PainMarker[], movements: Movement[], q: Intake) {
   const findings = buildFindings(markers, movements);
   const c: Ctx = { f: findings, q };
-  const scored = CONDITIONS.map((cond) => {
+  const scored = ALL_CONDITIONS.map((cond) => {
     const s = cond.score(c);
-    return { condition: cond, score: s.points, why: s.why };
+    const condition: Condition = { ...cond, ...(s.meta.name ? { name: s.meta.name } : {}), ...(s.meta.about ? { about: s.meta.about } : {}), ...(s.meta.selfCare ? { selfCare: s.meta.selfCare } : {}) };
+    return { condition, score: s.points, why: s.why, muscles: s.meta.muscles ?? cond.muscles ?? [] };
   })
     .filter((r) => r.score >= 2.5)
     .sort((a, b) => b.score - a.score);
   const top = scored[0]?.score ?? 1;
-  const results: Result[] = scored.slice(0, 6).map((r) => ({ ...r, pct: Math.round((r.score / top) * 100) }));
+  const results: Result[] = scored.slice(0, 8).map((r) => ({ ...r, pct: Math.round((r.score / top) * 100) }));
   return { findings, results, triage: triage(findings, q) };
 }
 

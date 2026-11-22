@@ -273,7 +273,9 @@ export const PART_LABEL: Record<string, string> = {
   kneeR: "Right knee",
   footL: "Left ankle / foot",
   footR: "Right ankle / foot",
-  lowBack: "Lower back",
+  lowBack: "Lower back / waist",
+  chest: "Chest / upper back",
+  pelvis: "Pelvis / lower back",
 };
 
 type Angles = Record<SegId, number>;

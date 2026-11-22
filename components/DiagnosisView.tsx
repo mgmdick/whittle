@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import BodyFigure from "./BodyFigure";
 import {
+  DETAILS,
   RED_FLAGS,
   assess,
   likelihoodLabel,
@@ -13,6 +14,8 @@ import type { AiAssessment } from "@/lib/assessment";
 import { usePersistentState } from "@/lib/storage";
 import { EMPTY_INTAKE } from "@/lib/diagnose";
 import type { Movement, PainMarker } from "@/lib/types";
+import { MUSCLE_BY_ID } from "@/lib/muscles";
+import { MuscleDetails } from "./MuscleInfo";
 
 type Props = {
   markers: PainMarker[];
@@ -137,6 +140,25 @@ export default function DiagnosisView({ markers, movements, onGoTo }: Props) {
       </section>
 
       <section className="card">
+        <div className="card-head">
+          <h3>Anything else?</h3>
+          <span className="muted small-text">sharpens the result</span>
+        </div>
+        <div className="chips">
+          {DETAILS.map((f) => (
+            <button
+              key={f.id}
+              className={"chip" + (intake.flags.includes(f.id) ? " on" : "")}
+              aria-pressed={intake.flags.includes(f.id)}
+              onClick={() => toggleFlag(f.id)}
+            >
+              {f.label}
+            </button>
+          ))}
+        </div>
+      </section>
+
+      <section className="card">
         <h3 className="mb">A few quick questions</h3>
         {QUESTIONS.map((q) => (
           <div key={q.key} className="q-row">
@@ -205,6 +227,7 @@ export default function DiagnosisView({ markers, movements, onGoTo }: Props) {
                       )}
                       <div className="sub">What it is</div>
                       <p>{r.condition.about}</p>
+                      {r.muscles.length > 0 && <Involved ids={r.muscles} />}
                       <div className="sub">What helps</div>
                       <ul className="tips">
                         {r.condition.selfCare.map((t) => (
@@ -271,7 +294,11 @@ function AiPanel({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           findings: findings.slice(0, 40).map((f) => ({
-            label: f.label.slice(0, 160),
+            label: (
+              f.label +
+              (f.muscles.length ? ` (over: ${f.muscles.slice(0, 3).map((id) => MUSCLE_BY_ID[id]?.name).filter(Boolean).join(", ")})` : "") +
+              (f.medial ? ", inner side" : f.lateral ? ", outer side" : "")
+            ).slice(0, 160),
             intensity: f.intensity,
             types: f.types.slice(0, 12).map((t) => t.slice(0, 40)),
             source: f.source,
@@ -287,7 +314,7 @@ function AiPanel({
             onset: intake.onset,
             age: intake.age,
             sex: intake.sex,
-            flags: RED_FLAGS.filter((f) => intake.flags.includes(f.id)).map((f) => f.label),
+            flags: [...RED_FLAGS, ...DETAILS].filter((f) => intake.flags.includes(f.id)).map((f) => f.label),
           },
           ruleBased: ruleBased.slice(0, 8),
           accessCode: status.needsCode ? code : undefined,
@@ -388,5 +415,30 @@ function AiPanel({
         </div>
       )}
     </section>
+  );
+}
+
+function Involved({ ids }: { ids: string[] }) {
+  const [open, setOpen] = useState<string | null>(null);
+  const list = ids.map((id) => MUSCLE_BY_ID[id]).filter(Boolean);
+  if (!list.length) return null;
+  return (
+    <>
+      <div className="sub">Muscles &amp; tendons involved</div>
+      <div className="chips">
+        {list.map((m) => (
+          <button
+            key={m.id}
+            className={"chip muscle-chip" + (open === m.id ? " on" : "")}
+            aria-expanded={open === m.id}
+            onClick={() => setOpen(open === m.id ? null : m.id)}
+          >
+            <span className="mc-dot" aria-hidden />
+            {m.name}
+          </button>
+        ))}
+      </div>
+      {open && MUSCLE_BY_ID[open] && <MuscleDetails muscle={MUSCLE_BY_ID[open]} label={MUSCLE_BY_ID[open].name} />}
+    </>
   );
 }
