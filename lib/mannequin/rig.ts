@@ -92,17 +92,59 @@ export function clonePose(p: Pose): Pose {
 
 const _e = new Euler(0, 0, 0, ORDER);
 
+const wrapPi = (a: number) => Math.atan2(Math.sin(a), Math.cos(a));
+
+/**
+ * Every rotation has two Euler decompositions: (x, z, y) and
+ * (x + π, π − z, y + π). The middle angle of the first is limited to ±90°,
+ * so a limb raised past 90° (e.g. an arm lifted sideways overhead) only fits
+ * the joint limits in the second form. Return the legal one if either is.
+ */
+function decompositions(q: Quaternion) {
+  _e.setFromQuaternion(q, ORDER);
+  const a = { x: _e.x, y: _e.y, z: _e.z };
+  const b = { x: wrapPi(a.x + Math.PI), y: wrapPi(a.y + Math.PI), z: wrapPi(Math.PI - a.z) };
+  return [a, b];
+}
+
+function excess(j: JointName, e: { x: number; y: number; z: number }) {
+  const lim = JOINTS[j].limits;
+  let d = 0;
+  for (const k of ["x", "y", "z"] as const) {
+    const lo = deg(lim[k][0]);
+    const hi = deg(lim[k][1]);
+    d += Math.max(0, lo - e[k]) + Math.max(0, e[k] - hi);
+  }
+  return d;
+}
+
+/** The decomposition that best fits the joint (legal first, then least twisted). */
+function bestEuler(j: JointName, q: Quaternion) {
+  const [a, b] = decompositions(q);
+  const ea = excess(j, a);
+  const eb = excess(j, b);
+  if (ea === 0 && eb === 0) return Math.abs(a.x) + Math.abs(a.y) <= Math.abs(b.x) + Math.abs(b.y) ? a : b;
+  return ea <= eb ? a : b;
+}
+
 /** Clamp a joint rotation to its anatomical limits. */
 export function clampJoint(j: JointName, q: Quaternion): Quaternion {
+  const e = bestEuler(j, q);
+  if (excess(j, e) === 0) return q;
   const lim = JOINTS[j].limits;
-  _e.setFromQuaternion(q, ORDER);
   _e.set(
-    MathUtils.clamp(_e.x, deg(lim.x[0]), deg(lim.x[1])),
-    MathUtils.clamp(_e.y, deg(lim.y[0]), deg(lim.y[1])),
-    MathUtils.clamp(_e.z, deg(lim.z[0]), deg(lim.z[1])),
+    MathUtils.clamp(e.x, deg(lim.x[0]), deg(lim.x[1])),
+    MathUtils.clamp(e.y, deg(lim.y[0]), deg(lim.y[1])),
+    MathUtils.clamp(e.z, deg(lim.z[0]), deg(lim.z[1])),
     ORDER
   );
   return q.setFromEuler(_e);
+}
+
+/** Joint angles in degrees, using the decomposition that fits the joint. */
+export function jointAngles(j: JointName, q: Quaternion) {
+  const e = bestEuler(j, q);
+  return { x: MathUtils.radToDeg(e.x), y: MathUtils.radToDeg(e.y), z: MathUtils.radToDeg(e.z) };
 }
 
 export function eulerDeg(q: Quaternion): { x: number; y: number; z: number } {
@@ -195,14 +237,14 @@ export function solveIK(
 
 // ------------------------------------------------------------ presets
 
-type E3 = [number, number, number]; // x, y, z in degrees
+export type E3 = [number, number, number]; // x, y, z in degrees
 const q = ([x, y, z]: E3) => new Quaternion().setFromEuler(new Euler(deg(x), deg(y), deg(z), ORDER));
 
 export type PresetGroup = "Arms" | "Trunk" | "Legs" | "Neck";
 /** One-sided presets are authored for the RIGHT side and mirrored for the left. */
 export type Preset = { name: string; group: PresetGroup | null; sided?: boolean; joints: Partial<Record<JointName, E3>> };
 
-const relaxed: Partial<Record<JointName, E3>> = {
+export const relaxed: Partial<Record<JointName, E3>> = {
   shoulderL: [0, 0, 6],
   shoulderR: [0, 0, -6],
   elbowL: [-10, 0, 0],
@@ -223,7 +265,7 @@ export const PRESETS: Preset[] = [
   { name: "Reach forward", group: "Arms", joints: { ...relaxed, shoulderL: [-90, 0, 4], shoulderR: [-90, 0, -4], elbowL: [-5, 0, 0], elbowR: [-5, 0, 0] } },
   { name: "Raise arm", group: "Arms", sided: true, joints: { ...relaxed, shoulderR: [-165, 0, -10], elbowR: [-5, 0, 0] } },
   { name: "Arm out to side", group: "Arms", sided: true, joints: { ...relaxed, shoulderR: [0, 0, -95], elbowR: [0, 0, 0] } },
-  { name: "Reach behind back", group: "Arms", sided: true, joints: { ...relaxed, shoulderR: [45, -70, -20], elbowR: [-110, 0, 0], wristR: [20, 0, 0] } },
+  { name: "Reach behind back", group: "Arms", sided: true, joints: { ...relaxed, shoulderR: [35, 90, -20], elbowR: [-110, 0, 0], wristR: [20, 0, 0] } },
   { name: "Reach across body", group: "Arms", sided: true, joints: { ...relaxed, shoulderR: [-90, 0, 35], elbowR: [-10, 0, 0] } },
   // Trunk
   {
@@ -288,7 +330,7 @@ const swapSide = (j: JointName): JointName =>
   (j.endsWith("L") ? j.slice(0, -1) + "R" : j.endsWith("R") ? j.slice(0, -1) + "L" : j) as JointName;
 
 /** Mirror a set of joint angles across the body's midline. */
-function mirrorJoints(joints: Partial<Record<JointName, E3>>): Partial<Record<JointName, E3>> {
+export function mirrorJoints(joints: Partial<Record<JointName, E3>>): Partial<Record<JointName, E3>> {
   const out: Partial<Record<JointName, E3>> = {};
   for (const [j, [x, y, z]] of Object.entries(joints) as [JointName, E3][]) out[swapSide(j)] = [x, -y, -z];
   return out;
@@ -312,6 +354,15 @@ export function presetLabel(p: Preset, side: "L" | "R"): string {
     "Tilt head": `Tilt head ${s}`,
   };
   return map[p.name] ?? `${p.name} (${s})`;
+}
+
+/** A pose from joint angles (degrees), optionally mirrored to the left side. */
+export function poseFromAngles(joints: Partial<Record<JointName, E3>>, side: "L" | "R" = "R", yaw = 0): Pose {
+  const pose = restPose();
+  const js = side === "L" ? mirrorJoints(joints) : joints;
+  for (const [j, e] of Object.entries(js) as [JointName, E3][]) pose.joints[j] = clampJoint(j, q(e));
+  pose.yaw = yaw;
+  return pose;
 }
 
 export function presetPose(p: Preset, yaw = 0, side: "L" | "R" = "R"): Pose {
@@ -382,13 +433,13 @@ export function slidersFor(j: JointName): Slider[] {
 }
 
 export function getAxis(pose: Pose, j: JointName, s: Slider): number {
-  return Math.round(eulerDeg(pose.joints[j])[s.axis] * s.sign);
+  return Math.round(jointAngles(j, pose.joints[j])[s.axis] * s.sign);
 }
 
 export function setAxis(pose: Pose, j: JointName, s: Slider, value: number) {
-  _e.setFromQuaternion(pose.joints[j], ORDER);
-  _e[s.axis] = deg(value * s.sign);
-  pose.joints[j] = clampJoint(j, new Quaternion().setFromEuler(_e));
+  const e = bestEuler(j, pose.joints[j]);
+  e[s.axis] = deg(value * s.sign);
+  pose.joints[j] = clampJoint(j, new Quaternion().setFromEuler(new Euler(e.x, e.y, e.z, ORDER)));
 }
 
 /** The joint a tapped part controls. */
@@ -429,7 +480,7 @@ export function limbElevation(q: Quaternion, side: "L" | "R" | "") {
 
 /** Human-readable angle for the joint being dragged. */
 export function describeJoint(j: JointName, pose: Pose): string {
-  const e = eulerDeg(pose.joints[j]);
+  const e = jointAngles(j, pose.joints[j]);
   const side = j.endsWith("L") ? SIDE_NAME.L : j.endsWith("R") ? SIDE_NAME.R : "";
   const r = (n: number) => Math.round(Math.abs(n));
   if (j.startsWith("shoulder") || j.startsWith("hip")) {
@@ -449,7 +500,7 @@ export function describeJoint(j: JointName, pose: Pose): string {
 /** Movement tags used by the symptom checker. */
 export function poseTags(pose: Pose): string[] {
   const t = new Set<string>();
-  const e = (j: JointName) => eulerDeg(pose.joints[j]);
+  const e = (j: JointName) => jointAngles(j, pose.joints[j]);
   for (const s of ["L", "R"] as const) {
     const sh = e(`shoulder${s}`);
     const el = limbElevation(pose.joints[`shoulder${s}`], s);

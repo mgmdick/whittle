@@ -268,7 +268,7 @@ export function buildMannequin(): MannequinModel {
 
   // Display plinth and brass support rod (the classic mannequin stand).
   const plinth = new Group();
-  const baseMat = new MeshStandardMaterial({ map: walnut, roughness: 0.38, metalness: 0.0 });
+  const baseMat = new MeshStandardMaterial({ map: walnut, roughness: 0.62, metalness: 0.0 });
   mats.push(baseMat);
   const top = new CylinderGeometry(0.42, 0.44, FLOOR_Y * 0.7, 72);
   top.translate(0, FLOOR_Y - FLOOR_Y * 0.35, 0);

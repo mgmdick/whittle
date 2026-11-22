@@ -1,6 +1,7 @@
 import { PART_LABEL, norm } from "./pose";
 import { personSide, regionById } from "./regions";
 import { MUSCLE_BY_ID, musclesAt } from "./muscles";
+import { summarizeCheck } from "./movementCheck";
 import type { Movement, PainMarker } from "./types";
 
 // A rules-based symptom checker. It suggests *possible* explanations and how
@@ -137,6 +138,31 @@ export function buildFindings(markers: PainMarker[], movements: Movement[]): Fin
     });
   }
   for (const mv of movements) {
+    if (mv.check) {
+      const r = mv.check;
+      const sm = summarizeCheck(r);
+      const side: Side = r.side === "L" ? "Left" : r.side === "R" ? "Right" : null;
+      const sideWord = side ? `${side} ` : "";
+      const tested = sm.painful.map((t) => t.title.toLowerCase()).join(", ");
+      out.push({
+        loc: sm.spot.loc,
+        side,
+        intensity: sm.intensity,
+        types: r.types,
+        label: `${sideWord}${sm.area.label.toLowerCase()} — ${sm.spot.label.toLowerCase()}${tested ? ` (hurts: ${tested})` : ""}`,
+        source: "movement",
+        tags: sm.tags,
+        medial: !!sm.spot.medial,
+        lateral: !!sm.spot.lateral,
+        below: !!sm.spot.below,
+        muscles: [],
+      });
+      if (sm.tags.includes("legRadiation"))
+        out.push({ loc: "hamstring", side, intensity: Math.max(3, sm.intensity - 1), types: ["Shooting"], label: `Pain spreading into the ${sideWord.toLowerCase()}leg`, source: "movement", tags: sm.tags, muscles: [] });
+      if (sm.tags.includes("armRadiation"))
+        out.push({ loc: "upperArm", side, intensity: Math.max(3, sm.intensity - 1), types: ["Shooting"], label: `Pain spreading into the ${sideWord.toLowerCase()}arm`, source: "movement", tags: sm.tags, muscles: [] });
+      continue;
+    }
     const tags = movementTags(mv);
     for (const part of mv.painParts) {
       const base = part.replace(/[LR]$/, "");
@@ -865,7 +891,8 @@ export const CONDITIONS: Condition[] = [
       if (feels(k, ["Aching"])) s.add(1, "Aching quality");
       if (younger(c)) s.add(1, "Common in your age group");
       if (c.q.onset === "gradual") s.add(1);
-      if (k.some((x) => x.source === "map") && k.filter((x) => x.source === "map").every((x) => x.below)) s.points -= 2.5;
+      const precise = k.filter((x) => x.below !== undefined);
+      if (precise.length && precise.every((x) => x.below)) s.points -= 2.5;
       return s;
     },
   },
@@ -1029,6 +1056,7 @@ export const CONDITIONS: Condition[] = [
       const h = at(c, ["heel"]);
       if (!located(s, h, 4)) return s;
       if (feels(h, ["Sharp", "Stabbing"])) s.add(1.5, "Sharp heel pain");
+      if (flag(c, "firstSteps")) s.add(3, "Worst with the first steps in the morning");
       if (c.q.onset === "gradual") s.add(1);
       return s;
     },
@@ -1147,7 +1175,62 @@ const MUSCLE_FOR: Record<string, string[]> = {
   "plantar-fasciitis": ["plantarFascia", "gastrocnemius"],
 };
 
+// Extra points when a positive movement test supports a condition that
+// already matches the location: [tag, points, reason].
+const CHECK_BOOSTS: Record<string, [string, number, string?][]> = {
+  "rotator-cuff": [["painfulArc", 4, "Painful arc when lifting the arm sideways"], ["externalRotation", 1, "Hurts with the hand behind the head"], ["behindBack", 1, "Hurts reaching behind the back"]],
+  "frozen-shoulder": [["globalRestriction", 4.5, "Can't move the shoulder in several directions"], ["shoulderRestricted", 1.5, "Movement is restricted"]],
+  "neck-strain": [["neckRot", 1, "Hurts turning the head"], ["neckTilt", 1, "Hurts tilting the head"], ["neckFlex", 0.5]],
+  "cervical-radiculopathy": [["armRadiation", 4.5, "Pain or tingling shoots into the arm"]],
+  "low-back-strain": [["sidebend", 1, "Hurts side-bending"], ["twist", 1, "Hurts twisting"]],
+  "disc-herniation": [["flexion", 1.5, "Worse bending forward"], ["sitStand", 1, "Hurts sitting down / standing up"]],
+  "facet-joint": [["extension", 2.5, "Worse leaning back"]],
+  "spinal-stenosis": [["extension", 1, "Worse leaning back"]],
+  sciatica: [["legRadiation", 3, "Pain spreads down the leg"]],
+  "hip-labral": [["hipRotation", 2.5, "Hurts crossing the legs / rotating the hip"], ["hipFlex", 1, "Hurts bringing the knee up"]],
+  "hip-oa": [["hipRotation", 2, "Hurts rotating the hip"], ["hipFlex", 1]],
+  "hip-bursitis": [["singleLeg", 2.5, "Hurts standing on that leg"]],
+  patellofemoral: [["squat", 1, "Hurts squatting"], ["stairs", 1.5, "Hurts on stairs"]],
+  "patellar-tendinopathy": [["stairs", 1, "Hurts on stairs"], ["squat", 1, "Hurts squatting"]],
+  meniscus: [["twistKnee", 3, "Hurts twisting on the leg"], ["kneeLocked", 3.5, "The knee won't fully straighten"], ["kneeFlex", 1, "Hurts bending the knee fully"]],
+  "knee-oa": [["kneeRestricted", 1, "Knee movement is restricted"]],
+  "tennis-elbow": [["wristExt", 2.5, "Hurts bending the wrist back / lifting palm-down"], ["grip", 1]],
+  "golfers-elbow": [["wristFlex", 2.5, "Hurts bending the wrist down"]],
+  "wrist-tendinitis": [["finkelstein", 4.5, "Thumb-tuck test hurts (De Quervain's sign)"]],
+  "carpal-tunnel": [["phalenTingle", 4.5, "Fingers tingle in the reverse-prayer hold"]],
+  achilles: [["heelRaise", 2.5, "Hurts rising onto tiptoes"]],
+  "calf-strain": [["heelRaise", 1, "Hurts rising onto tiptoes"]],
+  "plantar-fasciitis": [["firstSteps", 3.5, "Worst with the first steps in the morning"]],
+  "ankle-sprain": [["ankleRoll", 2, "Hurts rolling the ankle"]],
+  "achilles-rupture": [["cantTiptoe", 3, "Can't rise onto tiptoes"]],
+  "upper-back-strain": [["twist", 1, "Hurts twisting"], ["protraction", 1, "Hurts reaching around"], ["extension", 0.5]],
+  "rib-injury": [["breathing", 1.5, "Hurts taking a deep breath"]],
+};
+
 const MORE: Condition[] = [
+  {
+    id: "ac-joint",
+    name: "AC joint strain or arthritis",
+    area: "Top of the shoulder",
+    about: "The small joint where the collarbone meets the top of the shoulder blade. Pain is right on top of the shoulder, worst at the very top of lifting the arm and when reaching across the body or lying on that side. Often after a fall onto the shoulder, or wear from lifting.",
+    selfCare: ["Avoid reaching across your body and lifting overhead for a while", "Ice after activity; painkillers or anti-inflammatory gel", "Gentle shoulder strengthening once it settles"],
+    seeDoctor: "After a fall with a visible bump on top of the shoulder, or if it isn't improving in 4–6 weeks.",
+    urgency: "selfcare",
+    muscles: ["deltoid", "trapezius"],
+    score: (c) => {
+      const s = new Score();
+      const sh = at(c, ["shoulder", "shoulderBack"]);
+      if (!sh.length) return s;
+      const top = tagged(sh, ["acTop"]);
+      const cross = tagged(sh, ["crossBody"]);
+      if (!top && !cross) return s;
+      located(s, sh, 1.5);
+      if (top) s.add(3, "Pain at the top of the shoulder / top of the lift");
+      if (cross) s.add(2.5, "Hurts reaching across the body");
+      if (c.q.onset === "injury") s.add(1, "After an injury");
+      return s;
+    },
+  },
   {
     id: "muscle-strain",
     name: "Muscle strain or trigger point",
@@ -1842,7 +1925,7 @@ const MORE: Condition[] = [
     muscles: ["patellarTendon", "rectusFemoris"],
     score: (c) => {
       const s = new Score();
-      const k = at(c, ["kneecap"]).filter((x) => x.source === "map");
+      const k = at(c, ["kneecap"]).filter((x) => x.below !== undefined);
       if (!k.length || !low(k)) return s;
       located(s, k, 2);
       s.add(3.5, "Just below the kneecap");
@@ -1901,7 +1984,7 @@ const MORE: Condition[] = [
     muscles: ["pesAnserine", "hamstringMedial", "sartorius"],
     score: (c) => {
       const s = new Score();
-      const k = at(c, ["kneecap"]).filter((x) => x.source === "map");
+      const k = at(c, ["kneecap"]).filter((x) => x.below !== undefined);
       if (!k.length || !med(k)) return s;
       located(s, k, 2);
       s.add(2, "Inner side of the knee");
@@ -2236,10 +2319,14 @@ export function triage(findings: Finding[], q: Intake): Triage {
   if (flag(c, "morningStiff")) raise("doctor", "Prolonged morning stiffness can mean an inflammatory condition");
   if (flag(c, "walking")) raise("doctor", "Leg pain on walking should be checked (circulation or spinal narrowing)");
   if (flag(c, "rash")) raise("doctor", "A painful rash may be shingles — antivirals work best within 3 days");
+  if (findings.some((f) => f.tags.includes("nonMechanical")))
+    raise("doctor", "Pain that no movement or position changes may not be coming from muscles or joints — worth getting checked");
   if (flag(c, "weightLoss")) raise("doctor", "Weight loss or night pain should be investigated");
   if (q.duration === "months") raise("doctor", "Pain lasting months deserves a proper assessment");
   if (peak(findings) >= 8) raise("doctor", "Severe pain");
   if (feels(findings, ["Tingling / numb"])) raise("doctor", "Numbness or tingling");
+  if (findings.some((f) => f.tags.includes("armRadiation") || f.tags.includes("legRadiation")))
+    raise("doctor", "Pain spreading down an arm or leg suggests an irritated nerve");
 
   const copy: Record<Urgency, [string, string]> = {
     emergency: ["Call emergency services now", "Call 911 / 112 / 999 (or your local number). Don't drive yourself."],
@@ -2255,8 +2342,14 @@ export type Result = { condition: Condition; score: number; pct: number; why: st
 export function assess(markers: PainMarker[], movements: Movement[], q: Intake) {
   const findings = buildFindings(markers, movements);
   const c: Ctx = { f: findings, q };
+  const allTags = new Set(findings.flatMap((f) => f.tags));
+  const nonMech = allTags.has("nonMechanical");
   const scored = ALL_CONDITIONS.map((cond) => {
     const s = cond.score(c);
+    if (s.points > 0) {
+      for (const [tag, pts, why] of CHECK_BOOSTS[cond.id] ?? []) if (allTags.has(tag)) s.add(pts, why);
+      if (nonMech && cond.urgency === "selfcare" && (cond.muscles?.length || cond.id === "muscle-strain")) s.points *= 0.7;
+    }
     const condition: Condition = { ...cond, ...(s.meta.name ? { name: s.meta.name } : {}), ...(s.meta.about ? { about: s.meta.about } : {}), ...(s.meta.selfCare ? { selfCare: s.meta.selfCare } : {}) };
     return { condition, score: s.points, why: s.why, muscles: s.meta.muscles ?? cond.muscles ?? [] };
   })

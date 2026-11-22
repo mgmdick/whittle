@@ -11,13 +11,20 @@ A small mobile web app for showing where you're sore:
   labels appear. Tap any muscle for what it does, how it hurts (including
   referred pain), common causes and what helps. ~50 muscles and tendons
   (`lib/muscles.ts`).
-- **Mannequin** — a 3D wooden artist's mannequin (three.js) on its stand.
-  Drag any limb to pose it: an IK solver moves the whole chain with realistic
-  joint limits, and live angles are shown ("Right shoulder · forward 120°").
-  Drag the background to orbit, pinch to zoom, tap a part to mark it sore.
-  **Physics** mode (cannon-es ragdoll) knocks it off the stand to flop, grab
-  and fling; **Stand up** animates it back. 17 preset poses. Falls back to a 2D
-  mannequin if WebGL isn't available.
+- **Mannequin** — a 3D wooden artist's mannequin (three.js) on its stand, with
+  two modes:
+  - **Movement check** (default) — an animated Q&A, like a physio's quick
+    screen. Tap where it hurts on the mannequin (or pick an area), say which
+    side and exactly where, then the mannequin demonstrates 4–5 standard test
+    movements one at a time while the camera swings to the best angle. Answer
+    *No pain / Hurts / Hurts a lot / Can't do it*, with follow-ups where they
+    matter (e.g. *where in the lift* it hurt → painful arc vs AC joint). It
+    ends by asking whether movement changes the pain at all. Nine areas
+    (`lib/movementCheck.ts`); results feed the assessment.
+  - **Free pose** — tap a part to select it ("It hurts here" + plain-language
+    sliders), drag limbs (IK with anatomical joint limits), grouped movement
+    presets with a Left/Right switch, camera angle buttons, and a physics mode
+    (cannon-es ragdoll) that knocks it off its stand.
 - **Assess** — answers a few quick questions (how long, how it started, age,
   red-flag symptoms) and gives:
   - a **triage verdict**: emergency / get seen today / book a doctor / self-care,

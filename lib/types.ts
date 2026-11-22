@@ -22,6 +22,8 @@ export type Movement = {
   pose3d?: { j: Record<string, number[]>; yaw: number };
   tags?: string[];
   thumb?: string;
+  /** Answers from a guided movement check, if this entry came from one. */
+  check?: import("./movementCheck").CheckResult;
   angles: Record<string, number>;
   painParts: string[];
   intensity: number;
