@@ -152,8 +152,10 @@ const _d = new Quaternion();
 const _pInv = new Quaternion();
 
 /**
- * Cyclic-coordinate-descent IK: rotate each joint in `chain` (nearest the
- * effector first) so the effector point moves towards `target`.
+ * Cyclic-coordinate-descent IK: rotate each joint in `chain` so the effector
+ * point moves towards `target`. Joints are solved shoulder/hip first so the
+ * whole limb swings before the elbow/knee bends — closer to how people move —
+ * and long-axis twist is gently damped to avoid corkscrew solutions.
  */
 export function solveIK(
   pose: Pose,
@@ -180,7 +182,13 @@ export function solveIK(
       _pInv.copy(parentQ).invert();
       // local' = parent⁻¹ · D · parent · local
       const next = _pInv.clone().multiply(_d).multiply(parentQ).multiply(pose.joints[j]);
-      pose.joints[j].copy(clampJoint(j, next.normalize()));
+      clampJoint(j, next.normalize());
+      if (/^(shoulder|hip)/.test(j)) {
+        _e.setFromQuaternion(next, ORDER);
+        _e.y *= 0.85;
+        next.setFromEuler(_e);
+      }
+      pose.joints[j].copy(next);
     }
   }
 }
@@ -190,7 +198,9 @@ export function solveIK(
 type E3 = [number, number, number]; // x, y, z in degrees
 const q = ([x, y, z]: E3) => new Quaternion().setFromEuler(new Euler(deg(x), deg(y), deg(z), ORDER));
 
-export type Preset = { name: string; joints: Partial<Record<JointName, E3>>; yaw?: number };
+export type PresetGroup = "Arms" | "Trunk" | "Legs" | "Neck";
+/** One-sided presets are authored for the RIGHT side and mirrored for the left. */
+export type Preset = { name: string; group: PresetGroup | null; sided?: boolean; joints: Partial<Record<JointName, E3>> };
 
 const relaxed: Partial<Record<JointName, E3>> = {
   shoulderL: [0, 0, 6],
@@ -202,27 +212,32 @@ const relaxed: Partial<Record<JointName, E3>> = {
 };
 
 export const PRESETS: Preset[] = [
-  { name: "Standing", joints: relaxed },
+  { name: "Standing", group: null, joints: relaxed },
+  // Arms
   {
     name: "Arms overhead",
+    group: "Arms",
     joints: { ...relaxed, shoulderL: [-170, 0, 8], shoulderR: [-170, 0, -8], elbowL: [-5, 0, 0], elbowR: [-5, 0, 0] },
   },
-  { name: "Arms out", joints: { ...relaxed, shoulderL: [0, 0, 90], shoulderR: [0, 0, -90], elbowL: [0, 0, 0], elbowR: [0, 0, 0] } },
-  { name: "Reach forward", joints: { ...relaxed, shoulderL: [-90, 0, 4], shoulderR: [-90, 0, -4], elbowL: [-5, 0, 0], elbowR: [-5, 0, 0] } },
-  { name: "Raise one arm", joints: { ...relaxed, shoulderR: [-165, 0, -10], elbowR: [-5, 0, 0] } },
-  {
-    name: "Reach behind back",
-    joints: { ...relaxed, shoulderR: [45, -70, -20], elbowR: [-110, 0, 0], wristR: [20, 0, 0] },
-  },
+  { name: "Arms out", group: "Arms", joints: { ...relaxed, shoulderL: [0, 0, 90], shoulderR: [0, 0, -90], elbowL: [0, 0, 0], elbowR: [0, 0, 0] } },
+  { name: "Reach forward", group: "Arms", joints: { ...relaxed, shoulderL: [-90, 0, 4], shoulderR: [-90, 0, -4], elbowL: [-5, 0, 0], elbowR: [-5, 0, 0] } },
+  { name: "Raise arm", group: "Arms", sided: true, joints: { ...relaxed, shoulderR: [-165, 0, -10], elbowR: [-5, 0, 0] } },
+  { name: "Arm out to side", group: "Arms", sided: true, joints: { ...relaxed, shoulderR: [0, 0, -95], elbowR: [0, 0, 0] } },
+  { name: "Reach behind back", group: "Arms", sided: true, joints: { ...relaxed, shoulderR: [45, -70, -20], elbowR: [-110, 0, 0], wristR: [20, 0, 0] } },
+  { name: "Reach across body", group: "Arms", sided: true, joints: { ...relaxed, shoulderR: [-90, 0, 35], elbowR: [-10, 0, 0] } },
+  // Trunk
   {
     name: "Bend forward",
+    group: "Trunk",
     joints: { ...relaxed, pelvis: [28, 0, 0], waist: [60, 0, 0], neck: [15, 0, 0], shoulderL: [-80, 0, 4], shoulderR: [-80, 0, -4], hipL: [-28, 0, 3], hipR: [-28, 0, -3] },
   },
-  { name: "Lean back", joints: { ...relaxed, waist: [-25, 0, 0], neck: [-25, 0, 0] } },
-  { name: "Side bend", joints: { ...relaxed, waist: [0, 0, 30], neck: [0, 0, 10], shoulderR: [0, 0, -40], shoulderL: [0, 0, 2] } },
-  { name: "Twist", joints: { ...relaxed, waist: [0, 40, 0], neck: [0, 20, 0], shoulderL: [-40, 0, 10], elbowL: [-90, 0, 0], shoulderR: [-30, 0, -10], elbowR: [-90, 0, 0] } },
+  { name: "Lean back", group: "Trunk", joints: { ...relaxed, waist: [-25, 0, 0], neck: [-25, 0, 0] } },
+  { name: "Side bend", group: "Trunk", sided: true, joints: { ...relaxed, waist: [0, 0, 30], neck: [0, 0, 10], shoulderR: [0, 0, -12], shoulderL: [0, 0, 30] } },
+  { name: "Twist", group: "Trunk", sided: true, joints: { ...relaxed, waist: [0, -40, 0], neck: [0, -20, 0], shoulderR: [-40, 0, -10], elbowR: [-90, 0, 0], shoulderL: [-30, 0, 10], elbowL: [-90, 0, 0] } },
+  // Legs
   {
     name: "Squat",
+    group: "Legs",
     joints: {
       waist: [35, 0, 0],
       neck: [-20, 0, 0],
@@ -240,6 +255,7 @@ export const PRESETS: Preset[] = [
   },
   {
     name: "Sitting",
+    group: "Legs",
     joints: {
       shoulderL: [-20, 0, 6],
       shoulderR: [-20, 0, -6],
@@ -253,30 +269,148 @@ export const PRESETS: Preset[] = [
   },
   {
     name: "Lunge",
-    joints: {
-      shoulderL: [20, 0, 6],
-      shoulderR: [-25, 0, -6],
-      hipL: [-80, 0, 3],
-      kneeL: [85, 0, 0],
-      hipR: [15, 0, -3],
-      kneeR: [70, 0, 0],
-      ankleR: [25, 0, 0],
-    },
+    group: "Legs",
+    sided: true,
+    joints: { shoulderR: [20, 0, -6], shoulderL: [-25, 0, 6], hipR: [-80, 0, -3], kneeR: [85, 0, 0], hipL: [15, 0, 3], kneeL: [70, 0, 0], ankleL: [25, 0, 0] },
   },
-  {
-    name: "Stand on one leg",
-    joints: { ...relaxed, shoulderL: [0, 0, 30], shoulderR: [0, 0, -30], hipL: [-70, 0, 4], kneeL: [90, 0, 0] },
-  },
-  { name: "Look down", joints: { ...relaxed, neck: [55, 0, 0] } },
-  { name: "Turn head", joints: { ...relaxed, neck: [0, 70, 0] } },
-  { name: "Tilt head", joints: { ...relaxed, neck: [0, 0, -40] } },
+  { name: "Lift knee", group: "Legs", sided: true, joints: { ...relaxed, shoulderL: [0, 0, 30], shoulderR: [0, 0, -30], hipR: [-70, 0, -4], kneeR: [90, 0, 0] } },
+  { name: "Kick back", group: "Legs", sided: true, joints: { ...relaxed, hipR: [25, 0, -3], kneeR: [100, 0, 0] } },
+  // Neck
+  { name: "Look down", group: "Neck", joints: { ...relaxed, neck: [55, 0, 0] } },
+  { name: "Look up", group: "Neck", joints: { ...relaxed, neck: [-45, 0, 0] } },
+  { name: "Turn head", group: "Neck", sided: true, joints: { ...relaxed, neck: [0, -70, 0] } },
+  { name: "Tilt head", group: "Neck", sided: true, joints: { ...relaxed, neck: [0, 0, 40] } },
 ];
 
-export function presetPose(p: Preset, yaw = 0): Pose {
+export const PRESET_GROUPS: PresetGroup[] = ["Arms", "Trunk", "Legs", "Neck"];
+
+const swapSide = (j: JointName): JointName =>
+  (j.endsWith("L") ? j.slice(0, -1) + "R" : j.endsWith("R") ? j.slice(0, -1) + "L" : j) as JointName;
+
+/** Mirror a set of joint angles across the body's midline. */
+function mirrorJoints(joints: Partial<Record<JointName, E3>>): Partial<Record<JointName, E3>> {
+  const out: Partial<Record<JointName, E3>> = {};
+  for (const [j, [x, y, z]] of Object.entries(joints) as [JointName, E3][]) out[swapSide(j)] = [x, -y, -z];
+  return out;
+}
+
+/** Display name for a preset on a given side. */
+export function presetLabel(p: Preset, side: "L" | "R"): string {
+  if (!p.sided) return p.name;
+  const s = side === "L" ? "left" : "right";
+  const map: Record<string, string> = {
+    "Raise arm": `Raise ${s} arm`,
+    "Arm out to side": `${s[0].toUpperCase() + s.slice(1)} arm out`,
+    "Reach behind back": `Reach behind back (${s})`,
+    "Reach across body": `Reach across (${s} arm)`,
+    "Side bend": `Side bend to the ${s}`,
+    Twist: `Twist to the ${s}`,
+    Lunge: `Lunge (${s} leg forward)`,
+    "Lift knee": `Lift ${s} knee`,
+    "Kick back": `Kick ${s} leg back`,
+    "Turn head": `Turn head ${s}`,
+    "Tilt head": `Tilt head ${s}`,
+  };
+  return map[p.name] ?? `${p.name} (${s})`;
+}
+
+export function presetPose(p: Preset, yaw = 0, side: "L" | "R" = "R"): Pose {
   const pose = restPose();
-  for (const [j, e] of Object.entries(p.joints) as [JointName, E3][]) pose.joints[j] = clampJoint(j, q(e));
-  pose.yaw = p.yaw ?? yaw;
+  const joints = p.sided && side === "L" ? mirrorJoints(p.joints) : p.joints;
+  for (const [j, e] of Object.entries(joints) as [JointName, E3][]) pose.joints[j] = clampJoint(j, q(e));
+  pose.yaw = yaw;
   return pose;
+}
+
+// ------------------------------------------------------------ sliders
+
+export type Slider = { label: string; axis: "x" | "y" | "z"; sign: 1 | -1; min: number; max: number; ends: [string, string] };
+
+/**
+ * Plain-language sliders for each joint, in degrees. `sign` maps the slider to
+ * the Euler axis so that moving right means the second label in `ends`.
+ */
+export function slidersFor(j: JointName): Slider[] {
+  const lim = JOINTS[j].limits;
+  const R = j.endsWith("R");
+  const mk = (label: string, axis: "x" | "y" | "z", sign: 1 | -1, ends: [string, string]): Slider => {
+    const [a, b] = lim[axis];
+    const lo = sign === 1 ? a : -b;
+    const hi = sign === 1 ? b : -a;
+    return { label, axis, sign, min: Math.round(lo), max: Math.round(hi), ends };
+  };
+  const base = j.replace(/[LR]$/, "");
+  const out: 1 | -1 = R ? -1 : 1; // +Z lifts the left limb outwards, −Z the right
+  switch (base) {
+    case "shoulder":
+      return [
+        mk("Raise", "x", -1, ["Back", "Forward / up"]),
+        mk("Sideways", "z", out, ["Across body", "Out to side"]),
+        mk("Rotate", "y", out, ["Inward", "Outward"]),
+      ];
+    case "elbow":
+      return [mk("Elbow", "x", -1, ["Straight", "Bent"])];
+    case "wrist":
+      return [mk("Wrist", "x", 1, ["Up", "Down"])];
+    case "hip":
+      return [
+        mk("Leg", "x", -1, ["Back", "Forward / up"]),
+        mk("Sideways", "z", out, ["Across", "Out to side"]),
+        mk("Rotate", "y", out, ["Inward", "Outward"]),
+      ];
+    case "knee":
+      return [mk("Knee", "x", 1, ["Straight", "Bent"])];
+    case "ankle":
+      return [mk("Foot", "x", 1, ["Toes up", "Toes down"])];
+    case "waist":
+      return [
+        mk("Bend", "x", 1, ["Back", "Forward"]),
+        mk("Side bend", "z", 1, ["Left", "Right"]),
+        mk("Twist", "y", -1, ["Left", "Right"]),
+      ];
+    case "neck":
+      return [
+        mk("Nod", "x", 1, ["Up", "Down"]),
+        mk("Turn", "y", -1, ["Left", "Right"]),
+        mk("Tilt", "z", 1, ["Left", "Right"]),
+      ];
+    case "pelvis":
+      return [mk("Pelvis", "x", 1, ["Tip back", "Tip forward"])];
+    default:
+      return [];
+  }
+}
+
+export function getAxis(pose: Pose, j: JointName, s: Slider): number {
+  return Math.round(eulerDeg(pose.joints[j])[s.axis] * s.sign);
+}
+
+export function setAxis(pose: Pose, j: JointName, s: Slider, value: number) {
+  _e.setFromQuaternion(pose.joints[j], ORDER);
+  _e[s.axis] = deg(value * s.sign);
+  pose.joints[j] = clampJoint(j, new Quaternion().setFromEuler(_e));
+}
+
+/** The joint a tapped part controls. */
+export function jointForPart(part: string): JointName {
+  const s = part.endsWith("L") ? "L" : part.endsWith("R") ? "R" : "";
+  const base = part.replace(/[LR]$/, "");
+  const map: Record<string, string> = {
+    upperArm: "shoulder",
+    shoulder: "shoulder",
+    forearm: "elbow",
+    elbow: "elbow",
+    hand: "wrist",
+    thigh: "hip",
+    hip: "hip",
+    shin: "knee",
+    knee: "knee",
+    foot: "ankle",
+  };
+  if (map[base]) return `${map[base]}${s}` as JointName;
+  if (base === "chest" || base === "lowBack") return "waist";
+  if (base === "head" || base === "neck") return "neck";
+  return "pelvis";
 }
 
 // ------------------------------------------------------------ analysis

@@ -29,17 +29,25 @@ import {
   FLOOR_Y,
   JOINT_ORDER,
   PRESETS,
+  PRESET_GROUPS,
   clonePose,
   describeJoint,
   deserializePose,
   forward,
+  getAxis,
   groundedRoot,
+  jointForPart,
   poseTags,
+  presetLabel,
   presetPose,
   serializePose,
+  setAxis,
+  slidersFor,
   solveIK,
   type JointName,
   type Pose,
+  type PresetGroup,
+  type Slider,
   type WorldPose,
 } from "@/lib/mannequin/rig";
 import { Ragdoll } from "@/lib/mannequin/ragdoll";
@@ -49,8 +57,16 @@ import { intensityColor, intensityHSL, uid, type Movement } from "@/lib/types";
 
 type Props = { onSave: (m: Movement) => void; onAssess: () => void };
 type Mode = "pose" | "physics" | "blend";
+type CamView = "front" | "angle" | "side" | "back";
 
 const POSE_KEY = "bodymap.pose3d.v1";
+const VIEWS: { id: CamView; label: string; azimuth: number }[] = [
+  { id: "front", label: "Front", azimuth: 0 },
+  { id: "angle", label: "¾", azimuth: 32 },
+  { id: "side", label: "Side", azimuth: 90 },
+  { id: "back", label: "Back", azimuth: 180 },
+];
+const PICK_RADIUS_PX = 38;
 
 type Drag = {
   pointerId: number;
@@ -59,7 +75,6 @@ type Drag = {
   moved: boolean;
   part: string;
   joint: JointName;
-  ball: boolean;
   plane: Plane;
   effLocal: Vector3;
   hitWorld: Vector3;
@@ -68,43 +83,43 @@ type Drag = {
   root: Vector3;
 };
 
+/** Joints moved when dragging a part — shoulder/hip first so the limb swings as a whole. */
 function chainFor(joint: JointName, ball: boolean): JointName[] | "turn" {
   const s = joint.endsWith("L") ? "L" : joint.endsWith("R") ? "R" : "";
   const base = joint.replace(/[LR]$/, "");
+  const J = (n: string) => `${n}${s}` as JointName;
   if (ball) {
     switch (base) {
       case "neck":
       case "shoulder":
         return ["waist"];
       case "elbow":
-        return [`shoulder${s}` as JointName];
+        return [J("shoulder")];
       case "wrist":
-        return [`elbow${s}` as JointName, `shoulder${s}` as JointName];
+        return [J("shoulder"), J("elbow")];
       case "knee":
-        return [`hip${s}` as JointName];
+        return [J("hip")];
       case "ankle":
-        return [`knee${s}` as JointName, `hip${s}` as JointName];
+        return [J("hip"), J("knee")];
       default:
         return "turn";
     }
   }
   switch (base) {
-    case "pelvis":
-      return "turn";
     case "waist":
       return ["waist"];
     case "neck":
       return ["neck"];
     case "shoulder":
-      return [`shoulder${s}` as JointName];
+      return [J("shoulder")];
     case "elbow":
     case "wrist":
-      return [`elbow${s}` as JointName, `shoulder${s}` as JointName];
+      return [J("shoulder"), J("elbow")];
     case "hip":
-      return [`hip${s}` as JointName];
+      return [J("hip")];
     case "knee":
     case "ankle":
-      return [`knee${s}` as JointName, `hip${s}` as JointName];
+      return [J("hip"), J("knee")];
     default:
       return "turn";
   }
@@ -129,12 +144,31 @@ export default function Mannequin3D(props: Props) {
   return <Stage {...props} onFail={() => setFailed(true)} />;
 }
 
+type Api = {
+  applyPreset: (name: string, side: "L" | "R") => void;
+  setMode: (m: Mode) => void;
+  undo: () => void;
+  setView: (v: CamView) => void;
+  beginEdit: () => void;
+  getValue: (j: JointName, s: Slider) => number;
+  setValue: (j: JointName, s: Slider, v: number) => void;
+  resetJoint: (j: JointName) => void;
+  snapshot: () => string;
+  tags: () => string[];
+  serialized: () => ReturnType<typeof serializePose>;
+};
+
 function Stage({ onSave, onAssess, onFail }: Props & { onFail: () => void }) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const [mode, setMode] = useState<Mode>("pose");
   const [painParts, setPainParts] = usePersistentState<string[]>("bodymap.pose3d.pain.v1", []);
   const [intensity, setIntensity] = usePersistentState("bodymap.pose3d.intensity.v1", 6);
-  const [presetName, setPresetName] = usePersistentState("bodymap.pose3d.preset.v1", "Standing");
+  const [presetKey, setPresetKey] = usePersistentState("bodymap.pose3d.preset.v2", "Standing");
+  const [group, setGroup] = usePersistentState<PresetGroup>("bodymap.pose3d.group.v1", "Arms");
+  const [side, setSide] = usePersistentState<"L" | "R">("bodymap.pose3d.side.v1", "R");
+  const [camView, setCamView] = useState<CamView>("angle");
+  const [selected, setSelected] = useState<string | null>(null);
+  const [, setPoseVer] = useState(0);
   const [readout, setReadout] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [label, setLabel] = useState("");
@@ -145,19 +179,14 @@ function Stage({ onSave, onAssess, onFail }: Props & { onFail: () => void }) {
 
   const painRef = useRef<string[]>(painParts);
   const intensityRef = useRef(intensity);
+  const selectedRef = useRef<string | null>(null);
   painRef.current = painParts;
   intensityRef.current = intensity;
+  selectedRef.current = selected;
 
-  const api = useRef<{
-    applyPreset: (name: string) => void;
-    setMode: (m: Mode) => void;
-    undo: () => void;
-    resetView: () => void;
-    snapshot: () => string;
-    tags: () => string[];
-    serialized: () => ReturnType<typeof serializePose>;
-  } | null>(null);
+  const api = useRef<Api | null>(null);
   const modeRef = useRef<Mode>("pose");
+  const bump = () => setPoseVer((v) => v + 1);
 
   useEffect(() => {
     const wrap = wrapRef.current!;
@@ -182,21 +211,20 @@ function Stage({ onSave, onAssess, onFail }: Props & { onFail: () => void }) {
     scene.environment = envTex;
     scene.environmentIntensity = 0.55;
 
+    const TARGET = new Vector3(0, 1.0, 0);
     const camera = new PerspectiveCamera(34, 1, 0.05, 50);
-    camera.position.set(1.25, 1.3, 3.85);
+    const camAt = (azDeg: number, dist = 4.5, elev = 0.16) => {
+      const a = (azDeg * Math.PI) / 180;
+      return new Vector3(Math.sin(a) * dist, TARGET.y + elev * dist * 0.5, Math.cos(a) * dist);
+    };
+    camera.position.copy(camAt(32));
 
-    const hemi = new HemisphereLight(0xfff3e2, 0x6b5440, 0.55);
-    scene.add(hemi);
+    scene.add(new HemisphereLight(0xfff3e2, 0x6b5440, 0.55));
     const key = new DirectionalLight(0xfff6ea, 2.4);
     key.position.set(2.2, 4, 2.8);
     key.castShadow = true;
     key.shadow.mapSize.set(1024, 1024);
-    key.shadow.camera.left = -1.4;
-    key.shadow.camera.right = 1.4;
-    key.shadow.camera.top = 2.2;
-    key.shadow.camera.bottom = -0.6;
-    key.shadow.camera.near = 0.5;
-    key.shadow.camera.far = 10;
+    Object.assign(key.shadow.camera, { left: -1.4, right: 1.4, top: 2.2, bottom: -0.6, near: 0.5, far: 10 });
     key.shadow.bias = -0.0005;
     key.shadow.normalBias = 0.025;
     key.shadow.radius = 4;
@@ -212,13 +240,14 @@ function Stage({ onSave, onAssess, onFail }: Props & { onFail: () => void }) {
 
     const model: MannequinModel = buildMannequin();
     scene.add(model.root, model.plinth, model.rod);
+    for (const m of model.pickables) m.geometry.computeBoundingSphere();
 
     const controls = new OrbitControls(camera, renderer.domElement);
-    controls.target.set(0, 0.9, 0);
+    controls.target.copy(TARGET);
     controls.enablePan = false;
     controls.enableDamping = true;
     controls.dampingFactor = 0.08;
-    controls.rotateSpeed = 0.75;
+    controls.rotateSpeed = 0.7;
     controls.minDistance = 1.3;
     controls.maxDistance = 5.5;
     controls.maxPolarAngle = 1.66;
@@ -231,7 +260,9 @@ function Stage({ onSave, onAssess, onFail }: Props & { onFail: () => void }) {
     let frozenRoot: Vector3 | null = null;
     let ragdoll: Ragdoll | null = null;
     let blend: { from: WorldPose; t: number } | null = null;
+    let camTween: { from: Vector3; to: Vector3; t: number } | null = null;
     let drag: Drag | null = null;
+    let bgTap: { id: number; x: number; y: number } | null = null;
     const history: Pose[] = [];
 
     function readStored() {
@@ -261,39 +292,60 @@ function Stage({ onSave, onAssess, onFail }: Props & { onFail: () => void }) {
       }
     };
 
-    // ---- interaction
+    // ---- picking: exact ray hit, or the nearest part within a finger's width
     const ray = new Raycaster();
     const ndc = new Vector2();
-    const setNdc = (e: PointerEvent) => {
-      const r = renderer.domElement.getBoundingClientRect();
-      ndc.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
+    const rect = () => renderer.domElement.getBoundingClientRect();
+    const setRay = (cx: number, cy: number) => {
+      const r = rect();
+      ndc.set(((cx - r.left) / r.width) * 2 - 1, -((cy - r.top) / r.height) * 2 + 1);
       ray.setFromCamera(ndc, camera);
+    };
+    const pick = (cx: number, cy: number): { mesh: Mesh; point: Vector3 } | null => {
+      setRay(cx, cy);
+      const hit = ray.intersectObjects(model.pickables, false)[0];
+      if (hit) return { mesh: hit.object as Mesh, point: hit.point.clone() };
+      const r = rect();
+      let best: { mesh: Mesh; point: Vector3 } | null = null;
+      let bestD = PICK_RADIUS_PX;
+      for (const m of model.pickables) {
+        const c = m.geometry.boundingSphere!.center.clone().applyMatrix4(m.matrixWorld);
+        const p = c.clone().project(camera);
+        const sx = r.left + ((p.x + 1) / 2) * r.width;
+        const sy = r.top + ((1 - p.y) / 2) * r.height;
+        // Prefer limbs over joint balls when equally close.
+        const d = Math.hypot(sx - cx, sy - cy) + (m.userData.ball ? 6 : 0);
+        if (d < bestD) {
+          bestD = d;
+          best = { mesh: m, point: c };
+        }
+      }
+      return best;
     };
 
     const onDown = (e: PointerEvent) => {
       if (modeRef.current === "blend" || drag || e.target !== renderer.domElement) return;
-      setNdc(e);
-      const hit = ray.intersectObjects(model.pickables, false)[0];
-      if (!hit) return;
+      const hit = pick(e.clientX, e.clientY);
+      if (!hit) {
+        bgTap = { id: e.pointerId, x: e.clientX, y: e.clientY };
+        return; // let OrbitControls rotate the view
+      }
       e.stopPropagation();
       e.preventDefault();
-      const obj = hit.object as Mesh;
-      const joint = obj.userData.joint as JointName;
+      const joint = hit.mesh.userData.joint as JointName;
       const normal = new Vector3();
       camera.getWorldDirection(normal);
-      const group = model.groups[joint];
       drag = {
         pointerId: e.pointerId,
         sx: e.clientX,
         sy: e.clientY,
         moved: false,
-        part: obj.userData.part,
+        part: hit.mesh.userData.part,
         joint,
-        ball: !!obj.userData.ball,
         plane: new Plane().setFromNormalAndCoplanarPoint(normal, hit.point),
-        effLocal: group.worldToLocal(hit.point.clone()),
+        effLocal: model.groups[joint].worldToLocal(hit.point.clone()),
         hitWorld: hit.point.clone(),
-        chain: chainFor(joint, !!obj.userData.ball),
+        chain: chainFor(joint, !!hit.mesh.userData.ball),
         yaw0: target.yaw,
         root: new Vector3(0, rootY, 0),
       };
@@ -306,17 +358,18 @@ function Stage({ onSave, onAssess, onFail }: Props & { onFail: () => void }) {
       if (!drag || e.pointerId !== drag.pointerId) return;
       const dx = e.clientX - drag.sx;
       if (!drag.moved) {
-        if (Math.hypot(dx, e.clientY - drag.sy) < 7) return;
+        if (Math.hypot(dx, e.clientY - drag.sy) < 8) return;
         drag.moved = true;
         if (modeRef.current === "pose") {
           pushHistory();
           frozenRoot = drag.root.clone();
-          setPresetName("Custom");
+          setPresetKey("Custom");
+          setSelected(drag.part);
         } else if (ragdoll) {
           ragdoll.startGrab(drag.joint, drag.hitWorld);
         }
       }
-      setNdc(e);
+      setRay(e.clientX, e.clientY);
       if (!ray.ray.intersectPlane(drag.plane, tmp)) return;
       if (modeRef.current === "physics" && ragdoll) {
         ragdoll.moveGrab(tmp);
@@ -324,17 +377,18 @@ function Stage({ onSave, onAssess, onFail }: Props & { onFail: () => void }) {
       }
       if (drag.chain === "turn") {
         target.yaw = drag.yaw0 + dx * 0.012;
-        setReadout(`Turn · ${Math.round((((target.yaw * 180) / Math.PI) % 360 + 540) % 360 - 180)}°`);
+        setReadout(`Turning the whole body`);
         return;
       }
       solveIK(target, frozenRoot ?? drag.root, drag.chain, drag.joint, drag.effLocal, tmp.clone(), 10);
-      const lines = [drag.chain[drag.chain.length - 1], drag.chain[0]]
-        .filter((j, i, a) => a.indexOf(j) === i)
-        .map((j) => describeJoint(j, target));
-      setReadout(lines.join("\n"));
+      setReadout(drag.chain.map((j) => describeJoint(j, target)).join("\n"));
     };
 
     const onUp = (e: PointerEvent) => {
+      if (bgTap && e.pointerId === bgTap.id) {
+        if (Math.hypot(e.clientX - bgTap.x, e.clientY - bgTap.y) < 6) setSelected(null);
+        bgTap = null;
+      }
       if (!drag || e.pointerId !== drag.pointerId) return;
       const d = drag;
       drag = null;
@@ -351,10 +405,11 @@ function Stage({ onSave, onAssess, onFail }: Props & { onFail: () => void }) {
         } catch {
           /* unsupported */
         }
-        setPainParts((ps) => (ps.includes(d.part) ? ps.filter((x) => x !== d.part) : [...ps, d.part]));
+        setSelected((cur) => (cur === d.part ? null : d.part));
       } else {
         frozenRoot = null;
         store();
+        bump();
         window.setTimeout(() => setReadout(null), 900);
       }
     };
@@ -366,12 +421,13 @@ function Stage({ onSave, onAssess, onFail }: Props & { onFail: () => void }) {
 
     // ---- public actions
     api.current = {
-      applyPreset: (name) => {
+      applyPreset: (name, s) => {
         const p = PRESETS.find((x) => x.name === name);
         if (!p) return;
         pushHistory();
-        target = presetPose(p, target.yaw);
+        target = presetPose(p, target.yaw, s);
         store();
+        bump();
       },
       setMode: (m) => {
         if (m === "physics" && modeRef.current === "pose") {
@@ -392,13 +448,29 @@ function Stage({ onSave, onAssess, onFail }: Props & { onFail: () => void }) {
         if (prev) {
           target = prev;
           store();
+          bump();
         }
         setCanUndo(history.length > 0);
       },
-      resetView: () => {
-        camera.position.set(1.25, 1.3, 3.85);
-        controls.target.set(0, 0.9, 0);
-        controls.update();
+      setView: (v) => {
+        const az = VIEWS.find((x) => x.id === v)!.azimuth;
+        const dist = Math.min(5.2, Math.max(4.5, camera.position.distanceTo(controls.target)));
+        camTween = { from: camera.position.clone(), to: camAt(az, dist), t: 0 };
+        controls.target.copy(TARGET);
+      },
+      beginEdit: () => pushHistory(),
+      getValue: (j, s) => getAxis(target, j, s),
+      setValue: (j, s, v) => {
+        setAxis(target, j, s, v);
+        setPresetKey("Custom");
+        store();
+        bump();
+      },
+      resetJoint: (j) => {
+        pushHistory();
+        target.joints[j].identity();
+        store();
+        bump();
       },
       snapshot: () => {
         renderer.render(scene, camera);
@@ -410,9 +482,7 @@ function Stage({ onSave, onAssess, onFail }: Props & { onFail: () => void }) {
         g.fillStyle = "#efe4d3";
         g.fillRect(0, 0, c.width, c.height);
         const s = Math.max(c.width / src.width, c.height / src.height);
-        const w = src.width * s;
-        const h = src.height * s;
-        g.drawImage(src, (c.width - w) / 2, (c.height - h) / 2, w, h);
+        g.drawImage(src, (c.width - src.width * s) / 2, (c.height - src.height * s) / 2, src.width * s, src.height * s);
         return c.toDataURL("image/jpeg", 0.82);
       },
       tags: () => poseTags(target),
@@ -432,6 +502,7 @@ function Stage({ onSave, onAssess, onFail }: Props & { onFail: () => void }) {
     let raf = 0;
     let last = performance.now();
     const painColor = new Color();
+    const selColor = new Color(0x4fb3ff);
     const black = new Color(0, 0, 0);
     const white = new Color(1, 1, 1);
     const up = new Vector3(0, 1, 0);
@@ -450,8 +521,7 @@ function Stage({ onSave, onAssess, onFail }: Props & { onFail: () => void }) {
       } else if (modeRef.current === "blend" && blend) {
         blend.t = Math.min(1, blend.t + dt / 0.9);
         const t = blend.t < 0.5 ? 2 * blend.t * blend.t : 1 - Math.pow(-2 * blend.t + 2, 2) / 2;
-        const goal = forward(target, groundedRoot(target));
-        world = lerpWorld(blend.from, goal, t);
+        world = lerpWorld(blend.from, forward(target, groundedRoot(target)), t);
         if (blend.t >= 1) {
           blend = null;
           display = clonePose(target);
@@ -462,7 +532,7 @@ function Stage({ onSave, onAssess, onFail }: Props & { onFail: () => void }) {
         }
       } else {
         // Spring the displayed pose towards the target for a weighty feel.
-        const k = 1 - Math.exp(-dt * (drag?.moved ? 22 : 11));
+        const k = 1 - Math.exp(-dt * (drag?.moved ? 22 : 10));
         for (const j of JOINT_ORDER) display.joints[j].slerp(target.joints[j], k);
         display.yaw += (target.yaw - display.yaw) * k;
         const goalY = (frozenRoot ?? groundedRoot(display)).y;
@@ -471,7 +541,6 @@ function Stage({ onSave, onAssess, onFail }: Props & { onFail: () => void }) {
       }
       applyWorld(world);
 
-      // Support rod from the plinth to the underside of the pelvis.
       if (model.rod.visible) {
         const to = new Vector3(0, -0.1, -0.02).applyQuaternion(world.pelvis.quat).add(world.pelvis.pos);
         const dir = to.clone().sub(rodFrom);
@@ -481,16 +550,29 @@ function Stage({ onSave, onAssess, onFail }: Props & { onFail: () => void }) {
         model.rod.scale.set(1, len, 1);
       }
 
-      // Sore parts glow, breathing gently.
+      if (camTween) {
+        camTween.t = Math.min(1, camTween.t + dt / 0.55);
+        const t = 1 - Math.pow(1 - camTween.t, 3);
+        camera.position.lerpVectors(camTween.from, camTween.to, t);
+        if (camTween.t >= 1) camTween = null;
+      }
+
+      // Sore parts take the pain colour and breathe; the selected part glows blue.
       const pain = painRef.current;
+      const sel = selectedRef.current;
       painColor.setHSL(...intensityHSL(intensityRef.current));
       const pulse = 0.28 + 0.2 * Math.sin(now / 260);
       for (const m of model.pickables) {
         const mat = m.material as unknown as { color: Color; emissive: Color; emissiveIntensity: number };
-        if (pain.includes(m.userData.part)) {
+        const part = m.userData.part as string;
+        if (pain.includes(part)) {
           mat.color.copy(painColor);
           mat.emissive.copy(painColor);
-          mat.emissiveIntensity = pulse;
+          mat.emissiveIntensity = part === sel ? pulse + 0.35 : pulse;
+        } else if (part === sel) {
+          mat.color.copy(white);
+          mat.emissive.copy(selColor);
+          mat.emissiveIntensity = 0.32 + 0.12 * Math.sin(now / 220);
         } else if (mat.emissiveIntensity !== 0) {
           mat.color.copy(white);
           mat.emissive.copy(black);
@@ -504,12 +586,11 @@ function Stage({ onSave, onAssess, onFail }: Props & { onFail: () => void }) {
     raf = requestAnimationFrame(frame);
     setReady(true);
 
-    // Read-only hook used by automated UI tests: screen position of a point
-    // in a joint's local frame.
+    // Read-only hook used by automated UI tests.
     (window as unknown as { __mannequin?: unknown }).__mannequin = {
       screenOf: (j: JointName, local: [number, number, number] = [0, 0, 0]) => {
         const v = model.groups[j].localToWorld(new Vector3(...local)).project(camera);
-        const r = renderer.domElement.getBoundingClientRect();
+        const r = rect();
         return [r.left + ((v.x + 1) / 2) * r.width, r.top + ((1 - v.y) / 2) * r.height];
       },
       mode: () => modeRef.current,
@@ -539,76 +620,185 @@ function Stage({ onSave, onAssess, onFail }: Props & { onFail: () => void }) {
     window.setTimeout(() => setFlash(null), 1600);
   };
 
-  return (
-    <div className="panel">
-      <div className="toolbar">
-        <div className="seg" role="tablist" aria-label="Mode">
-          <button role="tab" aria-selected={mode !== "physics"} className={mode !== "physics" ? "on" : ""} onClick={() => api.current?.setMode("pose")}>
-            Pose
-          </button>
-          <button role="tab" aria-selected={mode === "physics"} className={mode === "physics" ? "on" : ""} onClick={() => api.current?.setMode("physics")}>
-            Physics
-          </button>
-        </div>
-        <div className="row-gap">
-          <button className="btn ghost small" onClick={() => api.current?.undo()} disabled={!canUndo || mode !== "pose"}>
-            ↶ Undo
-          </button>
-          <button className="btn ghost small" onClick={() => api.current?.resetView()}>
-            Recenter
-          </button>
-        </div>
-      </div>
+  // Bring the mannequin back into view after choosing a movement below it.
+  const showStage = () => {
+    const el = wrapRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    if (r.top < 70 || r.bottom > window.innerHeight - 80) el.scrollIntoView({ behavior: "smooth", block: "center" });
+  };
 
-      <p className="instruction">
-        {mode === "physics" ? (
-          <>
-            <strong>Physics:</strong> it&apos;s off its stand — grab a limb and fling it around. Tap <strong>Stand up</strong> to pose again.
-          </>
-        ) : (
-          <>
-            <strong>Drag</strong> a limb to pose it (joints stop where real ones do). <strong>Tap</strong> a part to mark it sore.
-            Drag the background to turn the view; pinch to zoom.
-          </>
-        )}
-      </p>
+  const togglePain = (part: string) =>
+    setPainParts((ps) => (ps.includes(part) ? ps.filter((x) => x !== part) : [...ps, part]));
+
+  const selJoint = selected ? jointForPart(selected) : null;
+  const sliders = selJoint ? slidersFor(selJoint) : [];
+  const groupPresets = PRESETS.filter((p) => p.group === group);
+  const step = painParts.length === 0 ? (presetKey === "Standing" ? 1 : 2) : 3;
+
+  return (
+    <div className="panel mannequin-panel">
+      <ol className="steps" aria-label="How it works">
+        <li className={step === 1 ? "on" : step > 1 ? "done" : ""}>
+          <span>1</span>Pick the movement
+        </li>
+        <li className={step === 2 ? "on" : step > 2 ? "done" : ""}>
+          <span>2</span>Tap where it hurts
+        </li>
+        <li className={step === 3 ? "on" : ""}>
+          <span>3</span>Save
+        </li>
+      </ol>
 
       <div className="figure-wrap stage3d" ref={wrapRef}>
         {!ready && <div className="stage-loading">Carving your mannequin…</div>}
+        <div className="view-btns" role="group" aria-label="Camera angle">
+          {VIEWS.map((v) => (
+            <button
+              key={v.id}
+              className={camView === v.id ? "on" : ""}
+              aria-pressed={camView === v.id}
+              onClick={() => {
+                setCamView(v.id);
+                api.current?.setView(v.id);
+              }}
+            >
+              {v.label}
+            </button>
+          ))}
+        </div>
         {readout && <div className="toast readout">{readout}</div>}
         {flash && <div className="toast ok">{flash}</div>}
-        {mode === "physics" && (
-          <button className="stage-btn" onClick={() => api.current?.setMode("pose")}>
-            Stand up
-          </button>
-        )}
-        {mode === "pose" && (
-          <button className="stage-btn ghost" onClick={() => api.current?.setMode("physics")}>
-            Drop it ⤓
-          </button>
-        )}
+        <div className="stage-actions">
+          {mode === "pose" && (
+            <button className="stage-btn ghost small" onClick={() => api.current?.undo()} disabled={!canUndo}>
+              ↶ Undo
+            </button>
+          )}
+          {mode === "physics" ? (
+            <button className="stage-btn" onClick={() => api.current?.setMode("pose")}>
+              Stand up
+            </button>
+          ) : (
+            <button className="stage-btn ghost small" onClick={() => api.current?.setMode("physics")} disabled={mode !== "pose"}>
+              Drop it ⤓
+            </button>
+          )}
+        </div>
       </div>
+      {!selected && mode === "pose" && (
+        <p className="instruction stage-caption">
+          <strong>Tap</strong> a body part to select it · <strong>drag</strong> a limb to move it · drag the background to look around
+        </p>
+      )}
+      {mode !== "pose" && (
+        <p className="instruction stage-caption">Grab a limb and fling it around. Tap <strong>Stand up</strong> to pose again.</p>
+      )}
 
-      <div className="presets" aria-label="Starting poses">
-        {PRESETS.map((p) => (
+      {selected && selJoint ? (
+        <div className="card part-card">
+          <div className="card-head">
+            <h3>{PART_LABEL[selected] ?? selected}</h3>
+            <button className="icon-btn" aria-label="Deselect" onClick={() => setSelected(null)}>
+              ✕
+            </button>
+          </div>
           <button
-            key={p.name}
-            className={"chip" + (presetName === p.name ? " on" : "")}
+            className={"btn full hurt-toggle" + (painParts.includes(selected) ? " on" : "")}
+            style={{ ["--c" as string]: intensityColor(intensity) }}
+            onClick={() => togglePain(selected)}
+          >
+            {painParts.includes(selected) ? "✓ Marked as sore — tap to undo" : "It hurts here"}
+          </button>
+          {mode === "pose" && sliders.length > 0 && (
+            <div className="sliders">
+              {sliders.map((s) => {
+                const v = api.current?.getValue(selJoint, s) ?? 0;
+                return (
+                  <label key={s.label} className="slider">
+                    <span className="slider-head">
+                      <strong>{s.label}</strong>
+                      <span className="muted">{Math.abs(v)}°</span>
+                    </span>
+                    <input
+                      type="range"
+                      min={s.min}
+                      max={s.max}
+                      step={1}
+                      value={v}
+                      onPointerDown={() => api.current?.beginEdit()}
+                      onChange={(e) => api.current?.setValue(selJoint, s, Number(e.target.value))}
+                    />
+                    <span className="slider-ends">
+                      <span>{s.ends[0]}</span>
+                      <span>{s.ends[1]}</span>
+                    </span>
+                  </label>
+                );
+              })}
+              <button className="btn ghost small" onClick={() => api.current?.resetJoint(selJoint)}>
+                Reset this joint
+              </button>
+            </div>
+          )}
+        </div>
+      ) : null}
+
+      <div className="card moves">
+        <div className="card-head">
+          <h3>Movements</h3>
+          <button
+            className="btn ghost small"
             disabled={mode !== "pose"}
             onClick={() => {
-              api.current?.applyPreset(p.name);
-              setPresetName(p.name);
+              api.current?.applyPreset("Standing", side);
+              setPresetKey("Standing");
             }}
           >
-            {p.name}
+            Stand straight
           </button>
-        ))}
+        </div>
+        <div className="moves-bar">
+          <div className="seg small" role="tablist" aria-label="Body area">
+            {PRESET_GROUPS.map((g) => (
+              <button key={g} role="tab" aria-selected={group === g} className={group === g ? "on" : ""} onClick={() => setGroup(g)}>
+                {g}
+              </button>
+            ))}
+          </div>
+          <div className="seg small" role="tablist" aria-label="Side">
+            {(["L", "R"] as const).map((s) => (
+              <button key={s} role="tab" aria-selected={side === s} className={side === s ? "on" : ""} onClick={() => setSide(s)}>
+                {s === "L" ? "Left" : "Right"}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="chips">
+          {groupPresets.map((p) => {
+            const key = p.sided ? `${p.name}|${side}` : p.name;
+            return (
+              <button
+                key={p.name}
+                className={"chip" + (presetKey === key ? " on" : "")}
+                disabled={mode !== "pose"}
+                onClick={() => {
+                  api.current?.applyPreset(p.name, side);
+                  setPresetKey(key);
+                  showStage();
+                }}
+              >
+                {presetLabel(p, side)}
+              </button>
+            );
+          })}
+        </div>
       </div>
 
       <div className="card">
         <div className="card-head">
           <h3>Sore parts</h3>
-          <span className="muted small-text">{painParts.length ? "tap to remove" : "tap the mannequin to mark"}</span>
+          <span className="muted small-text">{painParts.length ? "tap to remove" : "tap a part, then “It hurts here”"}</span>
         </div>
         {painParts.length > 0 && (
           <div className="chips">
@@ -628,7 +818,8 @@ function Stage({ onSave, onAssess, onFail }: Props & { onFail: () => void }) {
           className="btn primary full"
           disabled={painParts.length === 0}
           onClick={() => {
-            setLabel(presetName !== "Custom" && presetName !== "Standing" ? presetName : "");
+            const p = PRESETS.find((x) => presetKey === x.name || presetKey === `${x.name}|L` || presetKey === `${x.name}|R`);
+            setLabel(p && p.name !== "Standing" ? presetLabel(p, presetKey.endsWith("|L") ? "L" : "R") : "");
             setSaving(true);
           }}
         >
@@ -669,7 +860,7 @@ function Stage({ onSave, onAssess, onFail }: Props & { onFail: () => void }) {
               thumb: a?.snapshot(),
               painParts,
               intensity: d.intensity,
-              label: label.trim() || (presetName === "Custom" ? "Custom pose" : presetName),
+              label: label.trim() || "Custom pose",
               note: [d.types.join(", "), d.note].filter(Boolean).join(" — "),
             });
             setSaving(false);
