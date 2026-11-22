@@ -1823,3 +1823,66 @@ h3 {
   color: var(--t-selfcare);
   margin: 4px 0 8px;
 }
+
+/* ---------- Compact results */
+.based-on {
+  margin: -2px 2px 0;
+}
+.flags-card .card-head {
+  margin-bottom: 6px;
+}
+.flag-chip {
+  font-size: 13px;
+  padding: 6px 11px;
+}
+.flag-chip.on {
+  background: var(--t-emergency-bg);
+  border-color: var(--t-emergency);
+  color: var(--t-emergency);
+  font-weight: 700;
+}
+.result .urg {
+  align-self: flex-start;
+  flex: none;
+}
+.result-body p {
+  margin-bottom: 6px;
+}
+.result-body .why {
+  margin-bottom: 4px;
+  color: var(--muted);
+  font-size: 13px;
+}
+.more-btn {
+  margin-top: 8px;
+}
+.acc-head {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  font-size: 15px;
+  text-align: left;
+}
+.acc-head > span:last-child {
+  font-size: 20px;
+  color: var(--muted);
+}
+.acc-body {
+  margin-top: 12px;
+  animation: rise 0.2s ease-out;
+}
+.q-inline {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.q-inline .q-label {
+  width: 58px;
+  flex: none;
+  margin: 0;
+}

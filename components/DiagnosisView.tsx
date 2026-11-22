@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import BodyFigure from "./BodyFigure";
 import {
   DETAILS,
   RED_FLAGS,
@@ -15,12 +14,10 @@ import { usePersistentState } from "@/lib/storage";
 import { EMPTY_INTAKE } from "@/lib/diagnose";
 import type { Movement, PainMarker } from "@/lib/types";
 import { MUSCLE_BY_ID } from "@/lib/muscles";
-import { MuscleDetails } from "./MuscleInfo";
 
 type Props = {
-  markers: PainMarker[];
   movements: Movement[];
-  onGoTo: (tab: "body" | "dummy") => void;
+  onStart: () => void;
 };
 
 const URGENCY_META: Record<Urgency, { label: string; icon: string }> = {
@@ -35,20 +32,23 @@ const QUESTIONS: {
   label: string;
   options: [string, string][];
 }[] = [
-  { key: "duration", label: "How long has it hurt?", options: [["days", "Days"], ["weeks", "Weeks"], ["months", "Months+"]] },
-  {
-    key: "onset",
-    label: "How did it start?",
-    options: [["injury", "Injury / strain"], ["sudden", "Suddenly"], ["gradual", "Gradually"], ["woke", "Woke up with it"]],
-  },
-  { key: "age", label: "Age", options: [["u18", "Under 18"], ["18-39", "18–39"], ["40-59", "40–59"], ["60+", "60+"]] },
-  { key: "sex", label: "Sex (optional)", options: [["female", "Female"], ["male", "Male"]] },
+  { key: "duration", label: "How long", options: [["days", "Days"], ["weeks", "Weeks"], ["months", "Months+"]] },
+  { key: "onset", label: "Started", options: [["injury", "Injury"], ["sudden", "Suddenly"], ["gradual", "Gradually"], ["woke", "On waking"]] },
+  { key: "age", label: "Age", options: [["u18", "<18"], ["18-39", "18–39"], ["40-59", "40–59"], ["60+", "60+"]] },
+  { key: "sex", label: "Sex", options: [["female", "F"], ["male", "M"]] },
 ];
 
-export default function DiagnosisView({ markers, movements, onGoTo }: Props) {
+const firstSentence = (t: string) => {
+  const m = t.match(/^.*?[.!?](\s|$)/);
+  return (m ? m[0] : t).trim();
+};
+
+export default function DiagnosisView({ movements, onStart }: Props) {
   const [intake, setIntake] = usePersistentState<Intake>("bodymap.intake.v1", EMPTY_INTAKE);
   const [open, setOpen] = useState<string | null>(null);
-  const { findings, results, triage } = useMemo(() => assess(markers, movements, intake), [markers, movements, intake]);
+  const [showAll, setShowAll] = useState(false);
+  const [more, setMore] = useState(false);
+  const { findings, results, triage } = useMemo(() => assess([], movements, intake), [movements, intake]);
 
   const set = <K extends keyof Intake>(k: K, v: Intake[K]) =>
     setIntake((p) => ({ ...p, [k]: p[k] === v ? null : v }));
@@ -58,184 +58,78 @@ export default function DiagnosisView({ markers, movements, onGoTo }: Props) {
   if (findings.length === 0) {
     return (
       <div className="panel empty">
-        <div className="empty-art" aria-hidden>
-          <BodyFigure view="front" markers={[]} compact className="empty-body" />
-        </div>
-        <h2>Show me where it hurts first</h2>
-        <p className="muted">
-          Tap sore spots on the body map or pose the mannequin. Then come back here for an assessment of what might be
-          going on and how urgently to get help.
-        </p>
-        <div className="row-gap">
-          <button className="btn primary" onClick={() => onGoTo("body")}>
-            Open body map
-          </button>
-          <button className="btn ghost" onClick={() => onGoTo("dummy")}>
-            Pose mannequin
-          </button>
-        </div>
+        <h2>Nothing to assess yet</h2>
+        <p className="muted">Do a quick movement check on the mannequin first.</p>
+        <button className="btn primary" onClick={onStart}>
+          Start a movement check
+        </button>
       </div>
     );
   }
 
-  const hasFront = markers.some((m) => m.view === "front");
-  const hasBack = markers.some((m) => m.view === "back");
+  const checks = movements.filter((m) => m.check).slice(-3);
+  const answered = QUESTIONS.filter((q) => intake[q.key]).length + intake.flags.filter((f) => DETAILS.some((d) => d.id === f)).length;
+  const shown = showAll ? results : results.slice(0, 3);
 
   return (
     <div className="panel">
-      <section className="card assess-head">
-        <div className="assess-thumbs">
-          {hasFront && <BodyFigure view="front" markers={markers} compact className="thumb lg" />}
-          {hasBack && <BodyFigure view="back" markers={markers} compact className="thumb lg" />}
+      {checks.length > 0 && (
+        <div className="based-on muted small-text">
+          Based on: {checks.map((m) => m.label.replace(/^Movement check — /, "")).join(", ")}
         </div>
-        <div className="grow">
-          <div className="eyebrow">Assessment</div>
-          <h2 className="assess-title">
-            {findings.length} finding{findings.length === 1 ? "" : "s"}
-          </h2>
-          <p className="muted small-text">
-            {markers.length} sore spot{markers.length === 1 ? "" : "s"}
-            {movements.length > 0 && ` · ${movements.length} painful movement${movements.length === 1 ? "" : "s"}`}. Answer
-            below to sharpen the result.
-          </p>
-        </div>
-      </section>
+      )}
 
       <section className={`triage triage-${triage.level}`} aria-live="polite">
         <div className="triage-icon" aria-hidden>
           {URGENCY_META[triage.level].icon}
         </div>
         <div className="grow">
-          <div className="triage-kicker">{URGENCY_META[triage.level].label}</div>
           <h2>{triage.title}</h2>
-          <p>{triage.message}</p>
-          {triage.reasons.length > 0 && (
-            <ul className="triage-reasons">
-              {triage.reasons.slice(0, 3).map((r) => (
-                <li key={r}>{r}</li>
-              ))}
-            </ul>
-          )}
+          <p>{triage.reasons[0] ?? triage.message}</p>
         </div>
       </section>
 
-      <section className="card">
-        <div className="card-head">
-          <h3>Any of these right now?</h3>
-          {intake.flags.length > 0 && <span className="pill warn">{intake.flags.length} selected</span>}
-        </div>
-        <div className="flag-grid">
-          {RED_FLAGS.map((f) => (
-            <button
-              key={f.id}
-              className={"flag" + (intake.flags.includes(f.id) ? " on" : "")}
-              aria-pressed={intake.flags.includes(f.id)}
-              onClick={() => toggleFlag(f.id)}
-            >
-              <span className="check" aria-hidden />
-              {f.label}
-            </button>
-          ))}
-        </div>
-      </section>
-
-      <section className="card">
-        <div className="card-head">
-          <h3>Anything else?</h3>
-          <span className="muted small-text">sharpens the result</span>
-        </div>
-        <div className="chips">
-          {DETAILS.map((f) => (
-            <button
-              key={f.id}
-              className={"chip" + (intake.flags.includes(f.id) ? " on" : "")}
-              aria-pressed={intake.flags.includes(f.id)}
-              onClick={() => toggleFlag(f.id)}
-            >
-              {f.label}
-            </button>
-          ))}
-        </div>
-      </section>
-
-      <section className="card">
-        <h3 className="mb">A few quick questions</h3>
-        {QUESTIONS.map((q) => (
-          <div key={q.key} className="q-row">
-            <div className="q-label">{q.label}</div>
-            <div className="chips">
-              {q.options.map(([v, label]) => (
-                <button
-                  key={v}
-                  className={"chip" + (intake[q.key] === v ? " on" : "")}
-                  aria-pressed={intake[q.key] === v}
-                  onClick={() => set(q.key, v as never)}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
-          </div>
-        ))}
-      </section>
 
       <section>
         <div className="section-title">
-          <h3>What it could be</h3>
-          <span className="muted small-text">ranked by fit</span>
+          <h3>Likely causes</h3>
         </div>
         {results.length === 0 ? (
-          <div className="card muted">
-            No common pattern stands out from what you've marked. Add how it feels (sharp, aching…) to your spots, or
-            ask the AI below.
-          </div>
+          <div className="card muted">No clear pattern yet — answer a few questions below.</div>
         ) : (
           <ol className="results">
-            {results.map((r, i) => {
+            {shown.map((r, i) => {
               const isOpen = open === r.condition.id || (open === null && i === 0);
               return (
                 <li key={r.condition.id} className={"card result" + (isOpen ? " open" : "")}>
-                  <button
-                    className="result-head"
-                    aria-expanded={isOpen}
-                    onClick={() => setOpen(isOpen ? "" : r.condition.id)}
-                  >
+                  <button className="result-head" aria-expanded={isOpen} onClick={() => setOpen(isOpen ? "" : r.condition.id)}>
                     <span className="rank">{i + 1}</span>
                     <span className="grow">
                       <span className="result-name">{r.condition.name}</span>
-                      <span className="result-meta">
-                        <span className={`urg urg-${r.condition.urgency}`}>{URGENCY_META[r.condition.urgency].label}</span>
-                        <span className="muted">{r.condition.area}</span>
-                      </span>
                       <span className="fit" aria-label={`${likelihoodLabel(r.pct)}, fit ${r.pct}%`}>
                         <span className="fit-bar" style={{ width: `${Math.max(8, r.pct)}%` }} />
                       </span>
                     </span>
-                    <span className="fit-label">{likelihoodLabel(r.pct)}</span>
+                    <span className={`urg urg-${r.condition.urgency}`}>{URGENCY_META[r.condition.urgency].label}</span>
                   </button>
                   {isOpen && (
                     <div className="result-body">
-                      {r.why.length > 0 && (
-                        <>
-                          <div className="sub">Why it fits</div>
-                          <ul className="why">
-                            {r.why.map((w) => (
-                              <li key={w}>{w}</li>
-                            ))}
-                          </ul>
-                        </>
+                      <p>{firstSentence(r.condition.about)}</p>
+                      {r.why.length > 1 && (
+                        <ul className="why">
+                          {r.why.slice(1, 4).map((w) => (
+                            <li key={w}>{w}</li>
+                          ))}
+                        </ul>
                       )}
-                      <div className="sub">What it is</div>
-                      <p>{r.condition.about}</p>
-                      {r.muscles.length > 0 && <Involved ids={r.muscles} />}
-                      <div className="sub">What helps</div>
+                      <div className="sub">Try</div>
                       <ul className="tips">
-                        {r.condition.selfCare.map((t) => (
+                        {r.condition.selfCare.slice(0, 2).map((t) => (
                           <li key={t}>{t}</li>
                         ))}
                       </ul>
                       <div className="see-doc">
-                        <strong>See a doctor:</strong> {r.condition.seeDoctor}
+                        <span aria-hidden>🩺 </span>{firstSentence(r.condition.seeDoctor)}
                       </div>
                     </div>
                   )}
@@ -244,15 +138,82 @@ export default function DiagnosisView({ markers, movements, onGoTo }: Props) {
             })}
           </ol>
         )}
+        {results.length > 3 && (
+          <button className="btn ghost small more-btn" onClick={() => setShowAll(!showAll)}>
+            {showAll ? "Show fewer" : `Show ${results.length - 3} more`}
+          </button>
+        )}
       </section>
 
-      <AiPanel markers={markers} movements={movements} intake={intake} ruleBased={results.map((r) => r.condition.name)} findings={findings} />
+      <section className="card flags-card">
+        <div className="card-head">
+          <h3>Warning signs? Tap any you have</h3>
+          {intake.flags.some((f) => RED_FLAGS.some((r) => r.id === f)) && <span className="pill warn">!</span>}
+        </div>
+        <div className="chips">
+          {RED_FLAGS.map((f) => (
+            <button
+              key={f.id}
+              title={f.label}
+              className={"chip flag-chip" + (intake.flags.includes(f.id) ? " on" : "")}
+              aria-pressed={intake.flags.includes(f.id)}
+              aria-label={f.label}
+              onClick={() => toggleFlag(f.id)}
+            >
+              {f.short}
+            </button>
+          ))}
+        </div>
+      </section>
 
-      <p className="disclaimer">
-        This is not a medical diagnosis. It suggests common possibilities based on what you entered, to help you decide
-        what to do and talk to a clinician. If you're worried, or symptoms are severe or getting worse, seek medical
-        help.
-      </p>
+      <section className="card">
+        <button className="acc-head" aria-expanded={more} onClick={() => setMore(!more)}>
+          <span>
+            <strong>Sharpen the result</strong>
+            <span className="muted small-text"> {answered ? `· ${answered} answered` : "· optional"}</span>
+          </span>
+          <span aria-hidden>{more ? "−" : "+"}</span>
+        </button>
+        {more && (
+          <div className="acc-body">
+            {QUESTIONS.map((q) => (
+              <div key={q.key} className="q-inline">
+                <span className="q-label">{q.label}</span>
+                <div className="chips">
+                  {q.options.map(([v, label]) => (
+                    <button
+                      key={v}
+                      className={"chip" + (intake[q.key] === v ? " on" : "")}
+                      aria-pressed={intake[q.key] === v}
+                      onClick={() => set(q.key, v as never)}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ))}
+            <div className="q-label mt">Also…</div>
+            <div className="chips">
+              {DETAILS.map((f) => (
+                <button
+                  key={f.id}
+                  title={f.label}
+                  className={"chip" + (intake.flags.includes(f.id) ? " on" : "")}
+                  aria-pressed={intake.flags.includes(f.id)}
+                  onClick={() => toggleFlag(f.id)}
+                >
+                  {f.short}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+      </section>
+
+      <AiPanel markers={[]} movements={movements} intake={intake} ruleBased={results.map((r) => r.condition.name)} findings={findings} />
+
+      <p className="disclaimer">Not a diagnosis. If you&apos;re worried or it&apos;s getting worse, see a clinician.</p>
     </div>
   );
 }
@@ -338,7 +299,7 @@ function AiPanel({
         </div>
         <div className="grow">
           <h3>AI second opinion</h3>
-          <p className="muted small-text">Claude reviews everything you entered. Your name isn't sent.</p>
+          <p className="muted small-text">Claude reviews your answers. No name is sent.</p>
         </div>
       </div>
       {status.needsCode && !result && (
@@ -418,27 +379,3 @@ function AiPanel({
   );
 }
 
-function Involved({ ids }: { ids: string[] }) {
-  const [open, setOpen] = useState<string | null>(null);
-  const list = ids.map((id) => MUSCLE_BY_ID[id]).filter(Boolean);
-  if (!list.length) return null;
-  return (
-    <>
-      <div className="sub">Muscles &amp; tendons involved</div>
-      <div className="chips">
-        {list.map((m) => (
-          <button
-            key={m.id}
-            className={"chip muscle-chip" + (open === m.id ? " on" : "")}
-            aria-expanded={open === m.id}
-            onClick={() => setOpen(open === m.id ? null : m.id)}
-          >
-            <span className="mc-dot" aria-hidden />
-            {m.name}
-          </button>
-        ))}
-      </div>
-      {open && MUSCLE_BY_ID[open] && <MuscleDetails muscle={MUSCLE_BY_ID[open]} label={MUSCLE_BY_ID[open].name} />}
-    </>
-  );
-}

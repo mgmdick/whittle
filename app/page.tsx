@@ -1,7 +1,6 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import BodyMap from "@/components/BodyMap";
 import dynamic from "next/dynamic";
 
 const Mannequin3D = dynamic(() => import("@/components/Mannequin3D"), {
@@ -17,29 +16,22 @@ const Mannequin3D = dynamic(() => import("@/components/Mannequin3D"), {
 import LogView from "@/components/LogView";
 import DiagnosisView from "@/components/DiagnosisView";
 import { usePersistentState } from "@/lib/storage";
-import { uid, type LogEntry, type Movement, type PainMarker } from "@/lib/types";
+import type { LogEntry, Movement } from "@/lib/types";
 
-type Tab = "body" | "dummy" | "assess" | "log";
+type Tab = "dummy" | "assess" | "log";
 
 const SUBTITLE: Record<Tab, string> = {
-  body: "Tap where you're sore",
-  dummy: "Show the movement that hurts",
-  assess: "What it could be & what to do",
+  dummy: "Show me where it hurts",
+  assess: "What it could be",
   log: "Your history",
 };
 
 const MONTH = 30 * 24 * 60 * 60 * 1000;
 
 export default function Home() {
-  const [tab, setTab] = useState<Tab>("body");
-  const [markers, setMarkers] = usePersistentState<PainMarker[]>("bodymap.markers.v1", []);
+  const [tab, setTab] = useState<Tab>("dummy");
   const [log, setLog] = usePersistentState<LogEntry[]>("bodymap.log.v1", []);
-  const [flash, setFlash] = useState<string | null>(null);
 
-  const notify = (msg: string) => {
-    setFlash(msg);
-    window.setTimeout(() => setFlash(null), 1800);
-  };
 
   const recentMovements = useMemo(() => {
     const now = Date.now();
@@ -82,17 +74,6 @@ export default function Home() {
       </header>
 
       <main className="main" key={tab}>
-        {tab === "body" && (
-          <BodyMap
-            markers={markers}
-            setMarkers={(fn) => setMarkers(fn)}
-            onAssess={() => go("assess")}
-            onSaveToLog={(note) => {
-              setLog((l) => [...l, { kind: "map", id: uid(), createdAt: Date.now(), markers, note }]);
-              notify("Saved to your log");
-            }}
-          />
-        )}
         {tab === "dummy" && (
           <Mannequin3D
             onSave={(m) => {
@@ -101,14 +82,12 @@ export default function Home() {
             onAssess={() => go("assess")}
           />
         )}
-        {tab === "assess" && <DiagnosisView markers={markers} movements={recentMovements} onGoTo={go} />}
+        {tab === "assess" && <DiagnosisView movements={recentMovements} onStart={() => go("dummy")} />}
         {tab === "log" && <LogView log={log} setLog={(fn) => setLog(fn)} />}
       </main>
 
-      {flash && <div className="toast global ok">{flash}</div>}
 
       <nav className="tabs" aria-label="Sections">
-        <TabBtn active={tab === "body"} onClick={() => go("body")} label="Body" icon={<BodyIcon />} badge={markers.length || undefined} />
         <TabBtn active={tab === "dummy"} onClick={() => go("dummy")} label="Mannequin" icon={<DummyIcon />} />
         <TabBtn active={tab === "assess"} onClick={() => go("assess")} label="Assess" icon={<AssessIcon />} />
         <TabBtn active={tab === "log"} onClick={() => go("log")} label="Log" icon={<LogIcon />} badge={log.length || undefined} />
@@ -149,15 +128,6 @@ const s = {
   strokeLinejoin: "round" as const,
 };
 
-function BodyIcon() {
-  return (
-    <svg viewBox="0 0 24 24" width="24" height="24" {...s}>
-      <circle cx="12" cy="4.2" r="2.2" />
-      <path d="M8.5 8.5c1-.6 2.2-.9 3.5-.9s2.5.3 3.5.9l.6 5.5M8.5 8.5 7.9 14M10 8v6l-.8 7M14 8v6l.8 7" />
-      <circle cx="15.8" cy="11.6" r="1.7" fill="currentColor" stroke="none" />
-    </svg>
-  );
-}
 function DummyIcon() {
   return (
     <svg viewBox="0 0 24 24" width="24" height="24" {...s}>

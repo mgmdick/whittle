@@ -4,13 +4,6 @@
 
 A small mobile web app for showing where you're sore:
 
-- **Body** — a carved-wood figure, front and back. Tap the exact sore spot to
-  give it a 1–10 intensity, what it feels like and a note; the app names the
-  **muscles under that spot** (superficial and deep). Switch to **Muscles** to
-  reveal an anatomical muscle layer; pinch, scroll or use **+** to zoom and
-  labels appear. Tap any muscle for what it does, how it hurts (including
-  referred pain), common causes and what helps. ~50 muscles and tendons
-  (`lib/muscles.ts`).
 - **Mannequin** — a 3D wooden artist's mannequin (three.js) on its stand, with
   two modes:
   - **Movement check** (default) — an animated Q&A, like a physio's quick

@@ -21,35 +21,35 @@ export type Intake = {
 
 export const EMPTY_INTAKE: Intake = { duration: null, onset: null, age: null, sex: null, flags: [] };
 
-export const RED_FLAGS: { id: string; label: string }[] = [
-  { id: "chestPressure", label: "Chest pressure, tightness or squeezing" },
-  { id: "breath", label: "Short of breath, sweaty or faint" },
-  { id: "numbWeak", label: "New numbness or weakness in an arm, leg or face" },
-  { id: "bladder", label: "Loss of bladder/bowel control or numb groin" },
-  { id: "worstHeadache", label: "Sudden, worst-ever headache" },
-  { id: "fever", label: "Fever, chills or feeling very unwell" },
-  { id: "swelling", label: "Leg swollen, red or warm" },
-  { id: "cantBear", label: "Can't put weight on it / can't use it" },
-  { id: "deformity", label: "Looks deformed after an injury" },
-  { id: "weightLoss", label: "Unexplained weight loss or pain at night" },
+export const RED_FLAGS: { id: string; label: string; short: string }[] = [
+  { id: "chestPressure", label: "Chest pressure, tightness or squeezing", short: "Chest pressure" },
+  { id: "breath", label: "Short of breath, sweaty or faint", short: "Breathless / faint" },
+  { id: "numbWeak", label: "New numbness or weakness in an arm, leg or face", short: "New numbness / weakness" },
+  { id: "bladder", label: "Loss of bladder/bowel control or numb groin", short: "Bladder / bowel change" },
+  { id: "worstHeadache", label: "Sudden, worst-ever headache", short: "Worst-ever headache" },
+  { id: "fever", label: "Fever, chills or feeling very unwell", short: "Fever" },
+  { id: "swelling", label: "Leg swollen, red or warm", short: "Swollen red leg" },
+  { id: "cantBear", label: "Can't put weight on it / can't use it", short: "Can't bear weight" },
+  { id: "deformity", label: "Looks deformed after an injury", short: "Looks deformed" },
+  { id: "weightLoss", label: "Unexplained weight loss or pain at night", short: "Weight loss / night pain" },
 ];
 
 // Extra symptoms that sharpen the picture (not emergencies by themselves).
-export const DETAILS: { id: string; label: string }[] = [
-  { id: "swollenJoint", label: "The joint looks swollen" },
-  { id: "locking", label: "Clicks, catches, locks or gives way" },
-  { id: "pop", label: "Felt a pop or snap when it started" },
-  { id: "morningStiff", label: "Stiff for over an hour after waking" },
-  { id: "firstSteps", label: "Worst with the first steps in the morning" },
-  { id: "walking", label: "Leg pain when walking that eases with rest" },
-  { id: "breathing", label: "Worse breathing in deeply or coughing" },
-  { id: "rash", label: "Rash, blisters or skin change over the pain" },
-  { id: "nightNumb", label: "Tingling or numbness that wakes you at night" },
-  { id: "sitting", label: "Worse after sitting, better moving" },
-  { id: "bulge", label: "A lump or bulge you can see or feel" },
-  { id: "urine", label: "Burning or frequent urination" },
-  { id: "jaw", label: "Jaw pain or clicking when chewing" },
-  { id: "running", label: "Started with running or more exercise" },
+export const DETAILS: { id: string; label: string; short: string }[] = [
+  { id: "swollenJoint", label: "The joint looks swollen", short: "Swollen joint" },
+  { id: "locking", label: "Clicks, catches, locks or gives way", short: "Clicks / locks" },
+  { id: "pop", label: "Felt a pop or snap when it started", short: "Felt a pop" },
+  { id: "morningStiff", label: "Stiff for over an hour after waking", short: "Stiff mornings" },
+  { id: "firstSteps", label: "Worst with the first steps in the morning", short: "First steps worst" },
+  { id: "walking", label: "Leg pain when walking that eases with rest", short: "Hurts walking" },
+  { id: "breathing", label: "Worse breathing in deeply or coughing", short: "Hurts to breathe in" },
+  { id: "rash", label: "Rash, blisters or skin change over the pain", short: "Rash" },
+  { id: "nightNumb", label: "Tingling or numbness that wakes you at night", short: "Tingles at night" },
+  { id: "sitting", label: "Worse after sitting, better moving", short: "Worse sitting" },
+  { id: "bulge", label: "A lump or bulge you can see or feel", short: "Lump / bulge" },
+  { id: "urine", label: "Burning or frequent urination", short: "Burning pee" },
+  { id: "jaw", label: "Jaw pain or clicking when chewing", short: "Jaw pain" },
+  { id: "running", label: "Started with running or more exercise", short: "Started with exercise" },
 ];
 
 export type Finding = {
@@ -2323,7 +2323,7 @@ export function triage(findings: Finding[], q: Intake): Triage {
     raise("doctor", "Pain that no movement or position changes may not be coming from muscles or joints — worth getting checked");
   if (flag(c, "weightLoss")) raise("doctor", "Weight loss or night pain should be investigated");
   if (q.duration === "months") raise("doctor", "Pain lasting months deserves a proper assessment");
-  if (peak(findings) >= 8) raise("doctor", "Severe pain");
+  if (peak(findings) >= 8) raise("doctor", "The pain is severe (8/10 or worse)");
   if (feels(findings, ["Tingling / numb"])) raise("doctor", "Numbness or tingling");
   if (findings.some((f) => f.tags.includes("armRadiation") || f.tags.includes("legRadiation")))
     raise("doctor", "Pain spreading down an arm or leg suggests an irritated nerve");
