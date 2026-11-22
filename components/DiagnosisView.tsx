@@ -14,10 +14,17 @@ import { usePersistentState } from "@/lib/storage";
 import { EMPTY_INTAKE } from "@/lib/diagnose";
 import type { Movement, PainMarker } from "@/lib/types";
 import { MUSCLE_BY_ID } from "@/lib/muscles";
+import { exercisesFor } from "@/lib/exercises";
+import { ANSWERS, AREA_BY_ID } from "@/lib/movementCheck";
+import type { ExercisePlan } from "./ExercisePlayer";
 
 type Props = {
-  movements: Movement[];
+  /** Saved movement checks, oldest first. */
+  checks: Movement[];
+  /** Recent free-pose movements (used only if there are no checks). */
+  poses: Movement[];
   onStart: () => void;
+  onExercises: (plan: ExercisePlan) => void;
 };
 
 const URGENCY_META: Record<Urgency, { label: string; icon: string }> = {
@@ -43,11 +50,16 @@ const firstSentence = (t: string) => {
   return (m ? m[0] : t).trim();
 };
 
-export default function DiagnosisView({ movements, onStart }: Props) {
+export default function DiagnosisView({ checks, poses, onStart, onExercises }: Props) {
   const [intake, setIntake] = usePersistentState<Intake>("bodymap.intake.v1", EMPTY_INTAKE);
   const [open, setOpen] = useState<string | null>(null);
   const [showAll, setShowAll] = useState(false);
   const [more, setMore] = useState(false);
+  const [pickedId, setPickedId] = useState<string | null>(null);
+  const [shared, setShared] = useState(false);
+  const recentChecks = checks.slice(-5);
+  const selected = recentChecks.find((c) => c.id === pickedId) ?? recentChecks[recentChecks.length - 1] ?? null;
+  const movements = useMemo(() => (selected ? [selected] : poses), [selected, poses]);
   const { findings, results, triage } = useMemo(() => assess([], movements, intake), [movements, intake]);
 
   const set = <K extends keyof Intake>(k: K, v: Intake[K]) =>
@@ -67,23 +79,84 @@ export default function DiagnosisView({ movements, onStart }: Props) {
     );
   }
 
-  const checks = movements.filter((m) => m.check).slice(-3);
   const answered = QUESTIONS.filter((q) => intake[q.key]).length + intake.flags.filter((f) => DETAILS.some((d) => d.id === f)).length;
   const shown = showAll ? results : results.slice(0, 3);
+  const urgentNow = triage.level === "emergency" || triage.level === "urgent";
+  const checkSide = selected?.check?.side ?? null;
+  const short = (m: Movement) => m.label.replace(/^Movement check — /, "");
+  const cap = (t: string) => t.charAt(0).toUpperCase() + t.slice(1);
+  const day = (t: number) => new Date(t).toLocaleDateString(undefined, { day: "numeric", month: "short" });
+  const when = (t: number) => {
+    const d = new Date(t);
+    const sameDay = recentChecks.some((c) => c.createdAt !== t && new Date(c.createdAt).toDateString() === d.toDateString());
+    const today = d.toDateString() === new Date().toDateString();
+    const time = d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+    if (today) return sameDay ? `today ${time}` : "today";
+    return sameDay ? `${day(t)} ${time}` : day(t);
+  };
+
+  const share = async () => {
+    const lines: string[] = ["Whittle pain summary", ""];
+    if (selected?.check) {
+      const c = selected.check;
+      const area = AREA_BY_ID[c.area];
+      lines.push(`${cap(short(selected))} (${day(selected.createdAt)}) — ${(area.spots.find((x) => x.id === c.spot)?.label ?? "").toLowerCase()}`);
+      for (const t of area.tests) {
+        const ans = c.answers[t.id];
+        if (!ans) continue;
+        const lbl = t.question ? (ans === "hurts" ? "Yes" : "No") : ANSWERS.find((x) => x.id === ans)?.label;
+        lines.push(`• ${t.title}: ${lbl}`);
+      }
+      if (c.mechanical !== null) lines.push(`• Movement changes the pain: ${c.mechanical ? "Yes" : "No"}`);
+      if (c.types.length) lines.push(`• Feels: ${c.types.join(", ")}`);
+    }
+    const flags = RED_FLAGS.filter((f) => intake.flags.includes(f.id)).map((f) => f.label);
+    if (flags.length) lines.push(`• Warning signs: ${flags.join("; ")}`);
+    lines.push("", `Suggested: ${triage.title}`, `Possible causes: ${results.slice(0, 3).map((r) => r.condition.name).join("; ")}`, "", "(Self-check from the Whittle app — not a diagnosis.)");
+    const text = lines.join("\n");
+    try {
+      if (navigator.share) {
+        await navigator.share({ title: "My pain summary", text });
+        return;
+      }
+    } catch {
+      /* cancelled — fall back to copy */
+    }
+    try {
+      await navigator.clipboard.writeText(text);
+      setShared(true);
+      window.setTimeout(() => setShared(false), 1800);
+    } catch {
+      window.prompt("Copy your summary:", text);
+    }
+  };
 
   return (
     <div className="panel">
-      {checks.length > 0 && (
-        <div className="based-on muted small-text">
-          Based on: {checks.map((m) => m.label.replace(/^Movement check — /, "")).join(", ")}
+      {recentChecks.length > 1 && (
+        <div className="chips based-chips" aria-label="Choose which check">
+          {[...recentChecks].reverse().map((c) => (
+            <button key={c.id} className={"chip" + (selected?.id === c.id ? " on" : "")} onClick={() => setPickedId(c.id)}>
+              {cap(short(c))} · {when(c.createdAt)}
+            </button>
+          ))}
         </div>
       )}
 
       <section className={`triage triage-${triage.level}`} aria-live="polite">
-        <div className="triage-icon" aria-hidden>
-          {URGENCY_META[triage.level].icon}
-        </div>
+        {selected?.thumb ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img className="triage-thumb" src={selected.thumb} alt="Your mannequin in the painful position" />
+        ) : (
+          <div className="triage-icon" aria-hidden>
+            {URGENCY_META[triage.level].icon}
+          </div>
+        )}
         <div className="grow">
+          <div className="triage-kicker">
+            {URGENCY_META[triage.level].icon} {URGENCY_META[triage.level].label}
+            {selected && ` · ${short(selected)}`}
+          </div>
           <h2>{triage.title}</h2>
           <p>{triage.reasons[0] ?? triage.message}</p>
         </div>
@@ -122,12 +195,26 @@ export default function DiagnosisView({ movements, onStart }: Props) {
                           ))}
                         </ul>
                       )}
-                      <div className="sub">Try</div>
-                      <ul className="tips">
-                        {r.condition.selfCare.slice(0, 2).map((t) => (
-                          <li key={t}>{t}</li>
-                        ))}
-                      </ul>
+                      {(urgentNow || exercisesFor(r.condition.id).length === 0 || r.condition.urgency === "urgent" || r.condition.urgency === "emergency") && (
+                        <>
+                          <div className="sub">Try</div>
+                          <ul className="tips">
+                            {r.condition.selfCare.slice(0, 2).map((t) => (
+                              <li key={t}>{t}</li>
+                            ))}
+                          </ul>
+                        </>
+                      )}
+                      {!urgentNow && r.condition.urgency !== "emergency" && r.condition.urgency !== "urgent" && exercisesFor(r.condition.id).length > 0 && (
+                        <button
+                          className="btn accent full ex-btn"
+                          onClick={() =>
+                            onExercises({ title: r.condition.name, side: checkSide, ids: exercisesFor(r.condition.id).map((e) => e.id) })
+                          }
+                        >
+                          ▶ Show me the exercises ({exercisesFor(r.condition.id).length})
+                        </button>
+                      )}
                       <div className="see-doc">
                         <span aria-hidden>🩺 </span>{firstSentence(r.condition.seeDoctor)}
                       </div>
@@ -212,6 +299,10 @@ export default function DiagnosisView({ movements, onStart }: Props) {
       </section>
 
       <AiPanel markers={[]} movements={movements} intake={intake} ruleBased={results.map((r) => r.condition.name)} findings={findings} />
+
+      <button className="btn ghost full" onClick={share}>
+        {shared ? "✓ Copied — paste it into a message" : "Share with my physio or GP"}
+      </button>
 
       <p className="disclaimer">Not a diagnosis. If you&apos;re worried or it&apos;s getting worse, see a clinician.</p>
     </div>

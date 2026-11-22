@@ -1645,12 +1645,14 @@ h3 {
   justify-content: center;
 }
 .mannequin-panel.checking .stage3d {
-  height: 44dvh;
-  min-height: 300px;
+  height: clamp(210px, 36dvh, 420px);
+  min-height: 0;
 }
 .qa {
   padding: 16px;
-  overflow: hidden;
+  /* clip (not hidden): keeps the slide-in tidy without turning the card into
+     a scroll container, which would break the docked answer buttons */
+  overflow: clip;
 }
 .qa-top {
   display: flex;
@@ -1885,4 +1887,292 @@ h3 {
   width: 58px;
   flex: none;
   margin: 0;
+}
+
+/* ---------- Exercise player */
+.player-plan {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.player-plan .btn {
+  white-space: nowrap;
+  flex: none;
+}
+.player-plan .qa-q {
+  font-size: 19px;
+}
+.player-areas {
+  margin: 6px 0 10px;
+}
+.player-tabs {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  margin: 0 -16px 12px;
+  padding: 2px 16px;
+}
+.player-tabs::-webkit-scrollbar {
+  display: none;
+}
+.ptab {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1.5px solid var(--line);
+  background: var(--surface);
+  border-radius: 999px;
+  padding: 7px 12px 7px 7px;
+  font-size: 14px;
+  font-weight: 600;
+}
+.ptab.on {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.ptab-n {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-size: 12px;
+  font-weight: 800;
+  background: var(--line);
+}
+.ptab.on .ptab-n {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+.player-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+.kind {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: var(--surface-2);
+  color: var(--muted);
+}
+.kind-stretch {
+  background: var(--t-doctor-bg);
+  color: var(--t-doctor);
+}
+.kind-strength {
+  background: var(--t-urgent-bg);
+  color: var(--t-urgent);
+}
+.kind-mobility {
+  background: var(--t-selfcare-bg);
+  color: var(--t-selfcare);
+}
+.player-name {
+  font-size: 21px;
+  font-weight: 800;
+  margin: 8px 0 2px;
+  letter-spacing: -0.01em;
+}
+.player-dose {
+  font-weight: 700;
+  color: var(--accent);
+  font-size: 14px;
+  margin-bottom: 8px;
+}
+.player-steps {
+  margin: 0 0 12px;
+  padding-left: 20px;
+  font-size: 15px;
+  line-height: 1.5;
+}
+.player-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 14px;
+  background: var(--surface-2);
+}
+.reps {
+  font-size: 14px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.reps strong {
+  font-size: 20px;
+  color: var(--ink);
+  margin-left: 2px;
+}
+.player-bar .icon-btn {
+  font-size: 24px;
+  width: 40px;
+  height: 40px;
+}
+.player-bar .icon-btn:disabled {
+  opacity: 0.3;
+}
+.player-safety {
+  margin: 10px 0 0;
+  font-size: 12.5px;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+/* ---------- Results additions */
+.based-chips {
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  scrollbar-width: none;
+  margin: 0 -16px;
+  padding: 0 16px 2px;
+}
+.based-chips::-webkit-scrollbar {
+  display: none;
+}
+.based-chips .chip {
+  flex: none;
+}
+.triage-thumb {
+  flex: none;
+  width: 64px;
+  height: 78px;
+  object-fit: cover;
+  border-radius: 12px;
+  border: 2px solid color-mix(in srgb, var(--tc) 45%, transparent);
+  background: var(--surface);
+}
+.ex-btn {
+  margin: 10px 0 2px;
+}
+.trend {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-size: 13px;
+  font-weight: 800;
+  background: var(--surface-2);
+  color: var(--muted);
+}
+.trend.t1 {
+  background: var(--t-selfcare-bg);
+  color: var(--t-selfcare);
+}
+.trend.t-1 {
+  background: var(--t-emergency-bg);
+  color: var(--t-emergency);
+}
+.compare {
+  margin: 0 0 10px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: var(--surface-2);
+  font-weight: 600;
+}
+.recheck {
+  margin-top: 8px;
+}
+
+/* ---------- Small-screen ergonomics */
+.tool-switch button {
+  white-space: nowrap;
+  padding: 7px 6px;
+  font-size: 14px;
+}
+.qa-answers {
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+}
+.qa-answers.two {
+  grid-template-columns: 1fr 1fr;
+}
+.qa-answers .ans {
+  padding: 12px 4px;
+  font-size: 14px;
+  line-height: 1.15;
+  min-height: 54px;
+}
+/* Keep the answer buttons in reach: they dock above the tab bar while the
+   question scrolls underneath. */
+.qa-answers,
+.qa-follow .qa-list {
+  position: sticky;
+  bottom: calc(var(--tabs-h) + env(safe-area-inset-bottom) + 8px);
+  z-index: 3;
+  background: var(--surface);
+  padding-top: 8px;
+  box-shadow: 0 -12px 12px -6px var(--surface);
+}
+.player-areas {
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  scrollbar-width: none;
+  margin-left: -16px;
+  margin-right: -16px;
+  padding: 0 16px 2px;
+}
+.player-areas::-webkit-scrollbar {
+  display: none;
+}
+.player-areas .chip {
+  flex: none;
+}
+@media (max-width: 380px) {
+  .qa-q {
+    font-size: 20px;
+  }
+  .qa-prompt {
+    font-size: 15px;
+    margin-bottom: 10px;
+  }
+  .top h1 {
+    font-size: 17px;
+  }
+}
+@media (max-height: 740px) {
+  .mannequin-panel.checking .stage3d {
+    height: 30dvh;
+  }
+  .top {
+    padding-top: calc(env(safe-area-inset-top) + 8px);
+    padding-bottom: 6px;
+  }
+  .tagline {
+    display: none;
+  }
+}
+@media (max-height: 600px) {
+  .mannequin-panel.checking .stage3d {
+    height: 25dvh;
+  }
+  .qa {
+    padding: 12px 14px;
+  }
+  .qa-top {
+    margin-bottom: 2px;
+  }
+  .qa-q {
+    font-size: 18px;
+    margin-bottom: 4px;
+  }
+  .qa-prompt {
+    font-size: 14px;
+    line-height: 1.4;
+  }
+  .tool-switch button {
+    padding-top: 5px;
+    padding-bottom: 5px;
+  }
 }

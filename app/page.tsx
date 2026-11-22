@@ -17,13 +17,14 @@ import LogView from "@/components/LogView";
 import DiagnosisView from "@/components/DiagnosisView";
 import { usePersistentState } from "@/lib/storage";
 import type { LogEntry, Movement } from "@/lib/types";
+import type { StageRequest } from "@/components/Mannequin3D";
 
 type Tab = "dummy" | "assess" | "log";
 
 const SUBTITLE: Record<Tab, string> = {
   dummy: "Show me where it hurts",
-  assess: "What it could be",
-  log: "Your history",
+  assess: "What it could be — and what helps",
+  log: "Your checks over time",
 };
 
 const MONTH = 30 * 24 * 60 * 60 * 1000;
@@ -33,10 +34,17 @@ export default function Home() {
   const [log, setLog] = usePersistentState<LogEntry[]>("bodymap.log.v1", []);
 
 
-  const recentMovements = useMemo(() => {
+  const [request, setRequest] = useState<StageRequest | null>(null);
+
+  const movements = useMemo(
+    () => log.filter((e): e is { kind: "movement" } & Movement => e.kind === "movement"),
+    [log]
+  );
+  const checks = useMemo(() => movements.filter((m) => m.check), [movements]);
+  const poses = useMemo(() => {
     const now = Date.now();
-    return log.filter((e): e is { kind: "movement" } & Movement => e.kind === "movement" && now - e.createdAt < MONTH);
-  }, [log]);
+    return movements.filter((m) => !m.check && now - m.createdAt < MONTH);
+  }, [movements]);
 
   const go = (t: Tab) => {
     setTab(t);
@@ -80,17 +88,39 @@ export default function Home() {
               setLog((l) => [...l, { kind: "movement", ...m }]);
             }}
             onAssess={() => go("assess")}
+            request={request}
+            onRequestDone={() => setRequest(null)}
+            history={checks}
           />
         )}
-        {tab === "assess" && <DiagnosisView movements={recentMovements} onStart={() => go("dummy")} />}
-        {tab === "log" && <LogView log={log} setLog={(fn) => setLog(fn)} />}
+        {tab === "assess" && (
+          <DiagnosisView
+            checks={checks}
+            poses={poses}
+            onStart={() => go("dummy")}
+            onExercises={(plan) => {
+              setRequest({ kind: "exercises", plan });
+              go("dummy");
+            }}
+          />
+        )}
+        {tab === "log" && (
+          <LogView
+            log={log}
+            setLog={(fn) => setLog(fn)}
+            onRecheck={(check) => {
+              setRequest({ kind: "recheck", check });
+              go("dummy");
+            }}
+          />
+        )}
       </main>
 
 
       <nav className="tabs" aria-label="Sections">
-        <TabBtn active={tab === "dummy"} onClick={() => go("dummy")} label="Mannequin" icon={<DummyIcon />} />
-        <TabBtn active={tab === "assess"} onClick={() => go("assess")} label="Assess" icon={<AssessIcon />} />
-        <TabBtn active={tab === "log"} onClick={() => go("log")} label="Log" icon={<LogIcon />} badge={log.length || undefined} />
+        <TabBtn active={tab === "dummy"} onClick={() => go("dummy")} label="Check" icon={<DummyIcon />} />
+        <TabBtn active={tab === "assess"} onClick={() => go("assess")} label="Results" icon={<AssessIcon />} />
+        <TabBtn active={tab === "log"} onClick={() => go("log")} label="History" icon={<LogIcon />} />
       </nav>
     </div>
   );

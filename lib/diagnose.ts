@@ -2332,7 +2332,7 @@ export function triage(findings: Finding[], q: Intake): Triage {
     emergency: ["Call emergency services now", "Call 911 / 112 / 999 (or your local number). Don't drive yourself."],
     urgent: ["Get seen today", "Go to urgent care, a same-day GP appointment or A&E today."],
     doctor: ["Book a doctor or physio", "This is worth getting assessed in the next few days to weeks."],
-    selfcare: ["Likely OK to manage at home", "Try the self-care tips below. See a doctor if it's not improving in 1–2 weeks or gets worse."],
+    selfcare: ["Likely OK to manage at home", "See a doctor if it's not improving in 1–2 weeks, or gets worse."],
   };
   return { level, title: copy[level][0], message: copy[level][1], reasons };
 }

@@ -25,6 +25,8 @@ import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment
 import PainSheet from "./PainSheet";
 import PoseDummy from "./PoseDummy";
 import MovementCheck, { type CheckApi } from "./MovementCheck";
+import ExercisePlayer, { type ExercisePlan, type PlayerApi } from "./ExercisePlayer";
+import type { CheckResult } from "@/lib/movementCheck";
 import { buildMannequin, type MannequinModel } from "@/lib/mannequin/model";
 import {
   FLOOR_Y,
@@ -56,7 +58,15 @@ import { PART_LABEL } from "@/lib/pose";
 import { usePersistentState } from "@/lib/storage";
 import { intensityColor, intensityHSL, uid, type Movement } from "@/lib/types";
 
-type Props = { onSave: (m: Movement) => void; onAssess: () => void };
+export type StageRequest = { kind: "exercises"; plan: ExercisePlan } | { kind: "recheck"; check: CheckResult };
+
+type Props = {
+  onSave: (m: Movement) => void;
+  onAssess: () => void;
+  request?: StageRequest | null;
+  onRequestDone?: () => void;
+  history?: Movement[];
+};
 type Mode = "pose" | "physics" | "blend";
 type CamView = "front" | "angle" | "side" | "back";
 
@@ -145,9 +155,22 @@ export default function Mannequin3D(props: Props) {
   return <Stage {...props} onFail={() => setFailed(true)} />;
 }
 
+export type MoveOpts = {
+  /** Pose each repetition starts and ends in (default: standing). */
+  base?: Pose;
+  /** Seconds held at the peak (default 0.9). */
+  hold?: number;
+  /** Continuous cycle (circles): no hold or pause between reps. */
+  cycle?: boolean;
+  /** Play once, then settle back to the base pose. */
+  once?: boolean;
+  /** Called at the end of every repetition. */
+  onLoop?: () => void;
+};
+
 type Api = {
-  /** Loop a movement: rest → frames… → hold → rest. */
-  playMove: (frames: Pose[], speed?: number) => void;
+  /** Loop a movement: base → frames… → hold → base. */
+  playMove: (frames: Pose[], speed?: number, opts?: MoveOpts) => void;
   stopMove: () => void;
   showPose: (p: Pose) => void;
   setFocus: (parts: string[], tone?: "select" | "pain") => void;
@@ -166,7 +189,7 @@ type Api = {
   serialized: () => ReturnType<typeof serializePose>;
 };
 
-function Stage({ onSave, onAssess, onFail }: Props & { onFail: () => void }) {
+function Stage({ onSave, onAssess, onFail, request, onRequestDone, history = [] }: Props & { onFail: () => void }) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const [mode, setMode] = useState<Mode>("pose");
   const [painParts, setPainParts] = usePersistentState<string[]>("bodymap.pose3d.pain.v1", []);
@@ -175,7 +198,9 @@ function Stage({ onSave, onAssess, onFail }: Props & { onFail: () => void }) {
   const [group, setGroup] = usePersistentState<PresetGroup>("bodymap.pose3d.group.v1", "Arms");
   const [side, setSide] = usePersistentState<"L" | "R">("bodymap.pose3d.side.v1", "R");
   const [camView, setCamView] = useState<CamView>("angle");
-  const [tool, setTool] = usePersistentState<"check" | "pose">("bodymap.pose3d.tool.v1", "check");
+  const [tool, setTool] = usePersistentState<"check" | "exercise" | "pose">("bodymap.pose3d.tool.v2", "check");
+  const [plan, setPlan] = useState<ExercisePlan | null>(null);
+  const [recheck, setRecheck] = useState<CheckResult | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const [, setPoseVer] = useState(0);
   const [readout, setReadout] = useState<string | null>(null);
@@ -272,7 +297,14 @@ function Stage({ onSave, onAssess, onFail }: Props & { onFail: () => void }) {
     let camTween: { from: Vector3; to: Vector3; t: number } | null = null;
     let drag: Drag | null = null;
     let bgTap: { id: number; x: number; y: number } | null = null;
-    let anim: { segs: { from: Pose; to: Pose; dur: number }[]; t: number; total: number } | null = null;
+    let anim: {
+      segs: { from: Pose; to: Pose; dur: number }[];
+      t: number;
+      total: number;
+      base: Pose;
+      once: boolean;
+      onLoop?: () => void;
+    } | null = null;
     let checkMode = false;
     let freePose: Pose | null = null;
     let tapHandler: ((part: string) => void) | null = null;
@@ -460,18 +492,23 @@ function Stage({ onSave, onAssess, onFail }: Props & { onFail: () => void }) {
     // ---- public actions
     const standing = () => presetPose(PRESETS[0]);
     api.current = {
-      playMove: (frames, speed = 1.1) => {
-        const rest = standing();
+      playMove: (frames, speed = 1.1, opts = {}) => {
+        const base = opts.base ?? standing();
         const segs: { from: Pose; to: Pose; dur: number }[] = [];
-        let prev = rest;
+        let prev = base;
         frames.forEach((f) => {
           segs.push({ from: prev, to: f, dur: speed });
           prev = f;
         });
-        segs.push({ from: prev, to: prev, dur: 0.9 });
-        segs.push({ from: prev, to: rest, dur: 0.9 });
-        segs.push({ from: rest, to: rest, dur: 0.6 });
-        anim = { segs, t: 0, total: segs.reduce((a, b) => a + b.dur, 0) };
+        if (opts.cycle) {
+          segs.push({ from: prev, to: base, dur: speed });
+        } else {
+          const hold = opts.hold ?? 0.9;
+          if (hold > 0) segs.push({ from: prev, to: prev, dur: hold });
+          segs.push({ from: prev, to: base, dur: Math.max(0.6, speed * 0.85) });
+          segs.push({ from: base, to: base, dur: 0.5 });
+        }
+        anim = { segs, t: 0, total: segs.reduce((a, b) => a + b.dur, 0), base, once: !!opts.once, onLoop: opts.onLoop };
       },
       stopMove: () => {
         anim = null;
@@ -611,7 +648,17 @@ function Stage({ onSave, onAssess, onFail }: Props & { onFail: () => void }) {
         }
       } else {
         if (anim) {
-          anim.t = (anim.t + dt) % anim.total;
+          anim.t += dt;
+          if (anim.t >= anim.total) {
+            const a = anim;
+            a.onLoop?.();
+            if (a.once) {
+              anim = null;
+              target = clonePose(a.base);
+            } else a.t -= a.total;
+          }
+        }
+        if (anim) {
           let t = anim.t;
           let seg = anim.segs[0];
           for (const sg of anim.segs) {
@@ -727,9 +774,36 @@ function Stage({ onSave, onAssess, onFail }: Props & { onFail: () => void }) {
 
   useEffect(() => {
     if (!ready) return;
-    api.current?.setCheckMode(tool === "check");
-    if (tool === "check") setSelected(null);
+    api.current?.setCheckMode(tool !== "pose");
+    if (tool !== "pose") setSelected(null);
   }, [tool, ready]);
+
+  useEffect(() => {
+    if (!request) return;
+    if (request.kind === "exercises") {
+      setPlan(request.plan);
+      setTool("exercise");
+    } else {
+      setRecheck(request.check);
+      setTool("check");
+    }
+    onRequestDone?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [request]);
+
+  const playerApi = useRef<() => PlayerApi | null>(() => {
+    const a = api.current;
+    if (!a) return null;
+    return {
+      playMove: a.playMove,
+      stopMove: a.stopMove,
+      setFocus: a.setFocus,
+      setView: (v) => {
+        setCamView(v);
+        a.setView(v);
+      },
+    };
+  });
 
   const checkApi = useRef<() => CheckApi | null>(() => {
     const a = api.current;
@@ -770,14 +844,19 @@ function Stage({ onSave, onAssess, onFail }: Props & { onFail: () => void }) {
   const step = painParts.length === 0 ? (presetKey === "Standing" ? 1 : 2) : 3;
 
   return (
-    <div className={"panel mannequin-panel" + (tool === "check" ? " checking" : "")}>
+    <div className={"panel mannequin-panel" + (tool !== "pose" ? " checking" : "")}>
       <div className="seg tool-switch" role="tablist" aria-label="Mannequin mode">
-        <button role="tab" aria-selected={tool === "check"} className={tool === "check" ? "on" : ""} onClick={() => setTool("check")}>
-          Movement check
-        </button>
-        <button role="tab" aria-selected={tool === "pose"} className={tool === "pose" ? "on" : ""} onClick={() => setTool("pose")}>
-          Free pose
-        </button>
+        {(
+          [
+            ["check", "Check"],
+            ["exercise", "Exercises"],
+            ["pose", "Free pose"],
+          ] as const
+        ).map(([id, label]) => (
+          <button key={id} role="tab" aria-selected={tool === id} className={tool === id ? "on" : ""} onClick={() => setTool(id)}>
+            {label}
+          </button>
+        ))}
       </div>
       {tool === "pose" && (
       <ol className="steps" aria-label="How it works">
@@ -831,8 +910,25 @@ function Stage({ onSave, onAssess, onFail }: Props & { onFail: () => void }) {
         </div>
         )}
       </div>
-      {tool === "check" && (
-        <MovementCheck api={checkApi.current} ready={ready} onSave={onSave} onAssess={onAssess} />
+      {(
+        <div hidden={tool !== "check"}>
+        <MovementCheck
+          active={tool === "check"}
+          api={checkApi.current}
+          ready={ready}
+          onSave={onSave}
+          onAssess={onAssess}
+          preset={recheck}
+          onPresetUsed={() => setRecheck(null)}
+          history={history}
+        />
+        </div>
+      )}
+
+      {(
+        <div hidden={tool !== "exercise"}>
+          <ExercisePlayer active={tool === "exercise"} api={playerApi.current} ready={ready} plan={plan} onClearPlan={() => setPlan(null)} />
+        </div>
       )}
 
       {tool === "pose" && (

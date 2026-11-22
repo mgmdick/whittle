@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ANSWERS,
   AREAS,
@@ -13,11 +13,12 @@ import {
   type CamView,
   type CheckResult,
 } from "@/lib/movementCheck";
-import { poseFromAngles, type Pose } from "@/lib/mannequin/rig";
+import { poseFromAngles, relaxed, type Pose } from "@/lib/mannequin/rig";
+import type { MoveOpts } from "./Mannequin3D";
 import { PAIN_TYPES, intensityColor, uid, type Movement } from "@/lib/types";
 
 export type CheckApi = {
-  playMove: (frames: Pose[], speed?: number) => void;
+  playMove: (frames: Pose[], speed?: number, opts?: MoveOpts) => void;
   stopMove: () => void;
   showPose: (p: Pose) => void;
   setFocus: (parts: string[], tone?: "select" | "pain") => void;
@@ -29,11 +30,26 @@ export type CheckApi = {
 type Phase = "area" | "side" | "spot" | "test" | "follow" | "mechanical" | "feel" | "summary";
 
 type Props = {
+  /** Visible and driving the mannequin. */
+  active?: boolean;
   api: () => CheckApi | null;
   ready: boolean;
   onSave: (m: Movement) => void;
   onAssess: () => void;
+  /** Start straight at the tests for this area/side/spot (a re-check). */
+  preset?: CheckResult | null;
+  onPresetUsed?: () => void;
+  /** Earlier saved checks, for "compared with last time". */
+  history?: Movement[];
 };
+
+const RANK: Record<Answer, number> = { none: 0, hurts: 1, severe: 2, cant: 3 };
+
+// A friendly hello: the mannequin waves when you first arrive.
+const WAVE = [
+  { ...relaxed, shoulderR: [0, 0, -150], elbowR: [-60, 0, 0] },
+  { ...relaxed, shoulderR: [0, 0, -138], elbowR: [-18, 0, 0] },
+] as const;
 
 const partsFor = (area: AreaId, side: "L" | "R" | null) => {
   const a = AREA_BY_ID[area];
@@ -42,7 +58,7 @@ const partsFor = (area: AreaId, side: "L" | "R" | null) => {
   return a.parts.flatMap((p) => sides.map((s) => `${p}${s}`));
 };
 
-export default function MovementCheck({ api, ready, onSave, onAssess }: Props) {
+export default function MovementCheck({ active = true, api, ready, onSave, onAssess, preset, onPresetUsed, history = [] }: Props) {
   const [phase, setPhase] = useState<Phase>("area");
   const [area, setArea] = useState<AreaId | null>(null);
   const [side, setSide] = useState<"L" | "R" | null>(null);
@@ -54,7 +70,36 @@ export default function MovementCheck({ api, ready, onSave, onAssess }: Props) {
   const [types, setTypes] = useState<string[]>([]);
   const [saved, setSaved] = useState(false);
 
+  const waved = useRef(false);
+  const startedAt = useRef(Date.now());
+
+  useEffect(() => {
+    if (!preset) return;
+    setArea(preset.area);
+    setSide(preset.side);
+    setSpot(preset.spot);
+    setAnswers({});
+    setFollow({});
+    setMechanical(null);
+    setTypes([]);
+    setIdx(0);
+    setSaved(false);
+    startedAt.current = Date.now();
+    setPhase("test");
+    onPresetUsed?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [preset]);
+
   const A = area ? AREA_BY_ID[area] : null;
+  const previous = useMemo(
+    () =>
+      area
+        ? [...history]
+            .reverse()
+            .find((m) => m.check && m.check.area === area && m.check.side === side && m.createdAt < startedAt.current) ?? null
+        : null,
+    [history, area, side]
+  );
   const test = A ? A.tests[idx] : null;
   const result: CheckResult | null =
     area && spot ? { area, side, spot, answers, follow, mechanical, types } : null;
@@ -75,11 +120,16 @@ export default function MovementCheck({ api, ready, onSave, onAssess }: Props) {
   // Drive the mannequin for each step of the conversation.
   useEffect(() => {
     const m = api();
-    if (!m || !ready) return;
+    if (!m || !ready || !active) return;
     if (phase === "area") {
       m.stopMove();
       m.setFocus([]);
       m.setView("angle");
+      if (!waved.current) {
+        waved.current = true;
+        const frames = [WAVE[0], WAVE[1], WAVE[0], WAVE[1], WAVE[0]].map((f) => poseFromAngles(f as never, "R"));
+        m.playMove(frames, 0.32, { once: true, hold: 0.15 });
+      }
       m.setTapHandler((part) => {
         const r = areaForPart(part);
         chooseArea(r.area, r.side);
@@ -107,9 +157,16 @@ export default function MovementCheck({ api, ready, onSave, onAssess }: Props) {
       m.setFocus(partsFor(A.id, side), "pain");
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [phase, idx, area, side, ready]);
+  }, [phase, idx, area, side, ready, active]);
 
   useEffect(() => () => api()?.setTapHandler(null), [api]);
+
+  // Each new question: bring the mannequin, the question and the answers
+  // back into the designed layout, wherever the page was scrolled to.
+  useEffect(() => {
+    if (!active || phase === "area") return;
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }, [phase, idx, active]);
 
   const nextTest = () => {
     if (!A) return;
@@ -240,6 +297,8 @@ export default function MovementCheck({ api, ready, onSave, onAssess }: Props) {
                   onClick={() => {
                     setSpot(sp.id);
                     setIdx(0);
+                    startedAt.current = Date.now();
+                    setSaved(false);
                     setPhase("test");
                   }}
                 >
@@ -355,6 +414,8 @@ export default function MovementCheck({ api, ready, onSave, onAssess }: Props) {
                 const a = answers[t.id];
                 const lbl = t.question ? (a === "hurts" ? "Yes" : a ? "No" : "—") : ANSWERS.find((x) => x.id === a)?.label ?? "—";
                 const f = follow[t.id] && t.followUp?.options.find((o) => o.id === follow[t.id])?.label;
+                const prevA = previous?.check?.answers[t.id];
+                const trend = !t.question && a && prevA ? Math.sign(RANK[prevA] - RANK[a]) : null;
                 return (
                   <li key={t.id}>
                     <span className={`res-dot a-${t.question ? (a === "hurts" ? "hurts" : "none") : a ?? "skip"}`} />
@@ -363,6 +424,15 @@ export default function MovementCheck({ api, ready, onSave, onAssess }: Props) {
                       {f && <span className="muted small-text"> · {f}</span>}
                     </span>
                     <span className="muted small-text">{lbl}</span>
+                    {trend !== null && (
+                      <span
+                        className={"trend t" + trend}
+                        title={`Last time: ${ANSWERS.find((x) => x.id === prevA)?.label}`}
+                        aria-label={trend > 0 ? "better than last time" : trend < 0 ? "worse than last time" : "same as last time"}
+                      >
+                        {trend > 0 ? "↑" : trend < 0 ? "↓" : "="}
+                      </span>
+                    )}
                   </li>
                 );
               })}
@@ -372,8 +442,26 @@ export default function MovementCheck({ api, ready, onSave, onAssess }: Props) {
                 <span className="muted small-text">{mechanical === null ? "Not sure" : mechanical ? "Yes" : "No"}</span>
               </li>
             </ul>
+            {previous?.check && (
+              <p className="compare small-text">
+                {(() => {
+                  let better = 0;
+                  let worse = 0;
+                  for (const t of A.tests) {
+                    const a = answers[t.id];
+                    const b = previous.check!.answers[t.id];
+                    if (t.question || !a || !b) continue;
+                    if (RANK[a] < RANK[b]) better++;
+                    else if (RANK[a] > RANK[b]) worse++;
+                  }
+                  const when = new Date(previous.createdAt).toLocaleDateString(undefined, { day: "numeric", month: "short" });
+                  if (!better && !worse) return `Same as your check on ${when}.`;
+                  return `Since ${when}: ${better ? `${better} better` : ""}${better && worse ? ", " : ""}${worse ? `${worse} worse` : ""}.`;
+                })()}
+              </p>
+            )}
             <div className="qa-intensity">
-              <span className="pill" style={{ background: intensityColor(summary.intensity) }}>
+              <span className="pill" style={{ background: summary.painful.length ? intensityColor(summary.intensity) : "var(--t-selfcare-bg)", color: summary.painful.length ? undefined : "var(--t-selfcare)" }}>
                 {summary.painful.length ? `${summary.painful.length} movement${summary.painful.length === 1 ? "" : "s"} hurt` : "No movement hurt"}
               </span>
             </div>

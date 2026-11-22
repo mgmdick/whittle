@@ -4,9 +4,11 @@ import { useState } from "react";
 import BodyFigure from "./BodyFigure";
 import DummyFigure, { DUMMY_VIEWBOX, GROUND_Y } from "./DummyFigure";
 import { PART_LABEL, groundedPelvis } from "@/lib/pose";
+import type { CheckResult } from "@/lib/movementCheck";
 import { intensityColor, intensityWord, type LogEntry } from "@/lib/types";
 
 type Props = {
+  onRecheck?: (check: CheckResult) => void;
   log: LogEntry[];
   setLog: (fn: (l: LogEntry[]) => LogEntry[]) => void;
 };
@@ -31,6 +33,8 @@ export function summarize(entries: LogEntry[]): string {
         lines.push(`  • ${m.region}: ${m.intensity}/10${extra ? ` (${extra})` : ""}`);
       }
       if (e.note) lines.push(`  Note: ${e.note}`);
+    } else if (e.check) {
+      lines.push(`  • ${e.label}: ${e.note}`);
     } else {
       lines.push(`  • Hurts when: ${e.label} — ${e.intensity}/10`);
       lines.push(`    Where: ${e.painParts.map((p) => PART_LABEL[p] ?? p).join(", ")}`);
@@ -41,7 +45,7 @@ export function summarize(entries: LogEntry[]): string {
   return lines.join("\n").trim();
 }
 
-export default function LogView({ log, setLog }: Props) {
+export default function LogView({ log, setLog, onRecheck }: Props) {
   const [copied, setCopied] = useState(false);
   const sorted = [...log].sort((a, b) => b.createdAt - a.createdAt);
 
@@ -102,7 +106,7 @@ export default function LogView({ log, setLog }: Props) {
                 🗑
               </button>
             </div>
-            {e.kind === "map" ? <MapItem e={e} /> : <MoveItem e={e} />}
+            {e.kind === "map" ? <MapItem e={e} /> : <MoveItem e={e} onRecheck={onRecheck} />}
           </li>
         ))}
       </ul>
@@ -144,7 +148,7 @@ function MapItem({ e }: { e: Extract<LogEntry, { kind: "map" }> }) {
   );
 }
 
-function MoveItem({ e }: { e: Extract<LogEntry, { kind: "movement" }> }) {
+function MoveItem({ e, onRecheck }: { e: Extract<LogEntry, { kind: "movement" }>; onRecheck?: (c: CheckResult) => void }) {
   const view2d = e.view === "3d" ? null : e.view;
   return (
     <div className="log-body">
@@ -164,6 +168,27 @@ function MoveItem({ e }: { e: Extract<LogEntry, { kind: "movement" }> }) {
         />
         )}
       </div>
+      {e.check ? (
+        <div className="grow">
+          <div className="log-head">
+            <strong>{e.label.replace(/^Movement check — /, "").replace(/^./, (c) => c.toUpperCase())}</strong>
+            {(() => {
+              const n = Object.entries(e.check.answers).filter(([, a]) => a !== "none").length;
+              return (
+                <span className="pill" style={{ background: n ? intensityColor(e.intensity) : "var(--t-selfcare-bg)" }}>
+                  {n ? `${n} hurt` : "No pain"}
+                </span>
+              );
+            })()}
+          </div>
+          {e.note && <p className="small-text muted">{e.note}</p>}
+          {onRecheck && (
+            <button className="btn ghost small recheck" onClick={() => onRecheck(e.check!)}>
+              ↻ Re-check
+            </button>
+          )}
+        </div>
+      ) : (
       <div className="grow">
         <div className="log-head">
           <strong>Hurts when: {e.label}</strong>
@@ -174,6 +199,7 @@ function MoveItem({ e }: { e: Extract<LogEntry, { kind: "movement" }> }) {
         <p className="small-text">{e.painParts.map((p) => PART_LABEL[p] ?? p).join(", ")}</p>
         {e.note && <p className="note">{e.note}</p>}
       </div>
+      )}
     </div>
   );
 }
