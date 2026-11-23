@@ -2,15 +2,16 @@
 
 import { useEffect, useState } from "react";
 import { EXERCISES, type Exercise } from "@/lib/exercises";
-import { AREAS, AREA_BY_ID, type AreaId, type CamView } from "@/lib/movementCheck";
+import { AREAS, AREA_BY_ID, AREA_FRAME, type AreaId, type CamView } from "@/lib/movementCheck";
 import { poseFromAngles, type Pose } from "@/lib/mannequin/rig";
-import type { MoveOpts } from "./Mannequin3D";
+import type { Framing, MoveOpts } from "./Mannequin3D";
 
 export type PlayerApi = {
   playMove: (frames: Pose[], speed?: number, opts?: MoveOpts) => void;
   stopMove: () => void;
   setFocus: (parts: string[], tone?: "select" | "pain") => void;
   setView: (v: CamView) => void;
+  setFraming: (f: Framing) => void;
 };
 
 export type ExercisePlan = { title: string; side: "L" | "R" | null; ids: string[] };
@@ -50,6 +51,7 @@ export default function ExercisePlayer({ active = true, api, ready, plan, onClea
     const m = api();
     if (!m || !ready || !ex || !active) return;
     setReps(0);
+    m.setFraming(AREA_FRAME[ex.area]);
     m.setView(ex.view);
     m.setFocus(focusParts(ex.area, side));
     if (!playing) {

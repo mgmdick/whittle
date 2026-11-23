@@ -168,6 +168,9 @@ export type MoveOpts = {
   onLoop?: () => void;
 };
 
+export type Framing = { y: number; extent: number };
+export const FULL_BODY: Framing = { y: 1.0, extent: 2.15 };
+
 type Api = {
   /** Loop a movement: base → frames… → hold → base. */
   playMove: (frames: Pose[], speed?: number, opts?: MoveOpts) => void;
@@ -175,11 +178,15 @@ type Api = {
   showPose: (p: Pose) => void;
   setFocus: (parts: string[], tone?: "select" | "pain") => void;
   setCheckMode: (on: boolean) => void;
-  setTapHandler: (fn: ((part: string) => void) | null) => void;
+  setTapHandler: (fn: ((part: string, front: boolean) => void) | null) => void;
   applyPreset: (name: string, side: "L" | "R") => void;
   setMode: (m: Mode) => void;
   undo: () => void;
   setView: (v: CamView) => void;
+  /** Frame part of the body: centre height and vertical extent, in metres. */
+  setFraming: (f: Framing) => void;
+  /** Pixels at the bottom of the stage covered by the bottom sheet. */
+  setInset: (px: number) => void;
   beginEdit: () => void;
   getValue: (j: JointName, s: Slider) => number;
   setValue: (j: JointName, s: Slider, v: number) => void;
@@ -219,6 +226,8 @@ function Stage({ onSave, onAssess, onFail, request, onRequestDone, history = [] 
   selectedRef.current = selected;
 
   const api = useRef<Api | null>(null);
+  const sheetRef = useRef<HTMLDivElement>(null);
+  const [sheetMin, setSheetMin] = useState(false);
   const modeRef = useRef<Mode>("pose");
   const bump = () => setPoseVer((v) => v + 1);
 
@@ -247,11 +256,38 @@ function Stage({ onSave, onAssess, onFail, request, onRequestDone, history = [] 
 
     const TARGET = new Vector3(0, 1.0, 0);
     const camera = new PerspectiveCamera(34, 1, 0.05, 50);
-    const camAt = (azDeg: number, dist = 4.5, elev = 0.16) => {
-      const a = (azDeg * Math.PI) / 180;
-      return new Vector3(Math.sin(a) * dist, TARGET.y + elev * dist * 0.5, Math.cos(a) * dist);
+    let framing: Framing = FULL_BODY;
+    let azimuth = 32;
+    let inset = 0;
+
+    // Distance that fits `framing` into the part of the stage above the
+    // sheet. The view offset shifts the image up by half the sheet height
+    // (without scaling it), so the camera's centre sits in the middle of
+    // what's visible.
+    const fitDistance = (f: Framing, ins: number) => {
+      const w = Math.max(1, wrap.clientWidth);
+      const h = Math.max(1, wrap.clientHeight);
+      const th = Math.tan(((camera.fov / 2) * Math.PI) / 180);
+      const vis = Math.max(140, h - ins - 16);
+      const distV = ((f.extent / 2) * h) / (vis * th);
+      const distH = (f.extent * 0.36 * h) / (th * w);
+      return Math.min(14, Math.max(1.4, Math.max(distV, distH) * 1.04));
     };
-    camera.position.copy(camAt(32));
+    const framedPos = (az: number, f: Framing, ins: number) => {
+      const a = (az * Math.PI) / 180;
+      const d = fitDistance(f, ins);
+      return new Vector3(Math.sin(a) * d, f.y + d * 0.09, Math.cos(a) * d);
+    };
+    const applyOffset = () => {
+      const w = Math.max(1, wrap.clientWidth);
+      const h = Math.max(1, wrap.clientHeight);
+      camera.aspect = w / h;
+      if (inset < 1) camera.clearViewOffset();
+      else camera.setViewOffset(w, h, 0, inset / 2, w, h);
+      camera.updateProjectionMatrix();
+    };
+    if (wrap.clientHeight > 50) camera.position.copy(framedPos(azimuth, framing, 0));
+    else camera.position.set(Math.sin(0.56) * 5, 1.4, Math.cos(0.56) * 5);
 
     scene.add(new HemisphereLight(0xfff3e2, 0x6b5440, 0.55));
     const key = new DirectionalLight(0xfff6ea, 2.4);
@@ -283,7 +319,7 @@ function Stage({ onSave, onAssess, onFail, request, onRequestDone, history = [] 
     controls.dampingFactor = 0.08;
     controls.rotateSpeed = 0.7;
     controls.minDistance = 1.3;
-    controls.maxDistance = 5.5;
+    controls.maxDistance = 14;
     controls.maxPolarAngle = 1.66;
     controls.update();
 
@@ -294,7 +330,31 @@ function Stage({ onSave, onAssess, onFail, request, onRequestDone, history = [] 
     let frozenRoot: Vector3 | null = null;
     let ragdoll: Ragdoll | null = null;
     let blend: { from: WorldPose; t: number } | null = null;
-    let camTween: { from: Vector3; to: Vector3; t: number } | null = null;
+    let camTween: {
+      from: Vector3;
+      to: Vector3;
+      tFrom: Vector3;
+      tTo: Vector3;
+      iFrom: number;
+      iTo: number;
+      t: number;
+    } | null = null;
+    const reframe = (insetTo = inset) => {
+      if (wrap.clientHeight < 50 || wrap.clientWidth < 50) {
+        // Not laid out yet: remember the inset; the resize observer re-fits.
+        inset = insetTo;
+        return;
+      }
+      camTween = {
+        from: camera.position.clone(),
+        to: framedPos(azimuth, framing, insetTo),
+        tFrom: controls.target.clone(),
+        tTo: new Vector3(0, framing.y, 0),
+        iFrom: inset,
+        iTo: insetTo,
+        t: 0,
+      };
+    };
     let drag: Drag | null = null;
     let bgTap: { id: number; x: number; y: number } | null = null;
     let anim: {
@@ -307,8 +367,8 @@ function Stage({ onSave, onAssess, onFail, request, onRequestDone, history = [] 
     } | null = null;
     let checkMode = false;
     let freePose: Pose | null = null;
-    let tapHandler: ((part: string) => void) | null = null;
-    let tapCand: { id: number; x: number; y: number; part: string } | null = null;
+    let tapHandler: ((part: string, front: boolean) => void) | null = null;
+    let tapCand: { id: number; x: number; y: number; part: string; front: boolean } | null = null;
     let focus: { parts: string[]; tone: "select" | "pain" } = { parts: [], tone: "select" };
     const history: Pose[] = [];
 
@@ -349,10 +409,10 @@ function Stage({ onSave, onAssess, onFail, request, onRequestDone, history = [] 
       ndc.set(((cx - r.left) / r.width) * 2 - 1, -((cy - r.top) / r.height) * 2 + 1);
       ray.setFromCamera(ndc, camera);
     };
-    const pick = (cx: number, cy: number): { mesh: Mesh; point: Vector3 } | null => {
+    const pick = (cx: number, cy: number): { mesh: Mesh; point: Vector3; exact?: boolean } | null => {
       setRay(cx, cy);
       const hit = ray.intersectObjects(model.pickables, false)[0];
-      if (hit) return { mesh: hit.object as Mesh, point: hit.point.clone() };
+      if (hit) return { mesh: hit.object as Mesh, point: hit.point.clone(), exact: true };
       const r = rect();
       let best: { mesh: Mesh; point: Vector3 } | null = null;
       let bestD = PICK_RADIUS_PX;
@@ -380,7 +440,11 @@ function Stage({ onSave, onAssess, onFail, request, onRequestDone, history = [] 
         if (!h) return;
         e.stopPropagation();
         e.preventDefault();
-        tapCand = { id: e.pointerId, x: e.clientX, y: e.clientY, part: h.mesh.userData.part };
+        // Front or back of the body? The figure faces +Z in each part's frame.
+        // (For a near-miss, use the side the camera is looking at.)
+        const g = model.groups[h.mesh.userData.joint as JointName];
+        const front = h.exact ? g.worldToLocal(h.point.clone()).z > 0.005 : g.worldToLocal(camera.position.clone()).z > 0;
+        tapCand = { id: e.pointerId, x: e.clientX, y: e.clientY, part: h.mesh.userData.part, front };
         return;
       }
       const hit = pick(e.clientX, e.clientY);
@@ -450,7 +514,7 @@ function Stage({ onSave, onAssess, onFail, request, onRequestDone, history = [] 
           } catch {
             /* unsupported */
           }
-          tapHandler?.(tapCand.part);
+          tapHandler?.(tapCand.part, tapCand.front);
         }
         tapCand = null;
         return;
@@ -569,10 +633,18 @@ function Stage({ onSave, onAssess, onFail, request, onRequestDone, history = [] 
         setCanUndo(history.length > 0);
       },
       setView: (v) => {
-        const az = VIEWS.find((x) => x.id === v)!.azimuth;
-        const dist = Math.min(5.2, Math.max(4.5, camera.position.distanceTo(controls.target)));
-        camTween = { from: camera.position.clone(), to: camAt(az, dist), t: 0 };
-        controls.target.copy(TARGET);
+        azimuth = VIEWS.find((x) => x.id === v)!.azimuth;
+        reframe(camTween ? camTween.iTo : inset);
+      },
+      setFraming: (f) => {
+        if (Math.abs(f.y - framing.y) < 0.01 && Math.abs(f.extent - framing.extent) < 0.01) return;
+        framing = f;
+        reframe(camTween ? camTween.iTo : inset);
+      },
+      setInset: (px) => {
+        const goal = camTween ? camTween.iTo : inset;
+        if (Math.abs(px - goal) < 18) return;
+        reframe(px);
       },
       beginEdit: () => pushHistory(),
       getValue: (j, s) => getAxis(target, j, s),
@@ -610,8 +682,10 @@ function Stage({ onSave, onAssess, onFail, request, onRequestDone, history = [] 
       const w = wrap.clientWidth;
       const h = wrap.clientHeight;
       renderer.setSize(w, h, false);
-      camera.aspect = w / Math.max(h, 1);
-      camera.updateProjectionMatrix();
+      applyOffset();
+      // The stage can mount before it has a size (e.g. switching tabs):
+      // re-fit the camera once real dimensions arrive or they change.
+      if (h > 50 && w > 50) reframe(camTween ? camTween.iTo : inset);
     });
     ro.observe(wrap);
 
@@ -690,9 +764,12 @@ function Stage({ onSave, onAssess, onFail, request, onRequestDone, history = [] 
       }
 
       if (camTween) {
-        camTween.t = Math.min(1, camTween.t + dt / 0.55);
+        camTween.t = Math.min(1, camTween.t + dt / 0.6);
         const t = 1 - Math.pow(1 - camTween.t, 3);
         camera.position.lerpVectors(camTween.from, camTween.to, t);
+        controls.target.lerpVectors(camTween.tFrom, camTween.tTo, t);
+        inset = camTween.iFrom + (camTween.iTo - camTween.iFrom) * t;
+        applyOffset();
         if (camTween.t >= 1) camTween = null;
       }
 
@@ -751,6 +828,14 @@ function Stage({ onSave, onAssess, onFail, request, onRequestDone, history = [] 
       target: (j: JointName) => describeJoint(j, target),
       shown: (j: JointName) => describeJoint(j, display),
       animating: () => !!anim,
+      camera: () => ({
+        dist: +camera.position.distanceTo(controls.target).toFixed(2),
+        inset: Math.round(inset),
+        w: wrap.clientWidth,
+        h: wrap.clientHeight,
+        fit: +fitDistance(framing, inset).toFixed(2),
+        framing,
+      }),
     };
 
     return () => {
@@ -776,6 +861,7 @@ function Stage({ onSave, onAssess, onFail, request, onRequestDone, history = [] 
     if (!ready) return;
     api.current?.setCheckMode(tool !== "pose");
     if (tool !== "pose") setSelected(null);
+    else api.current?.setFraming(FULL_BODY);
   }, [tool, ready]);
 
   useEffect(() => {
@@ -798,6 +884,7 @@ function Stage({ onSave, onAssess, onFail, request, onRequestDone, history = [] 
       playMove: a.playMove,
       stopMove: a.stopMove,
       setFocus: a.setFocus,
+      setFraming: a.setFraming,
       setView: (v) => {
         setCamView(v);
         a.setView(v);
@@ -814,6 +901,7 @@ function Stage({ onSave, onAssess, onFail, request, onRequestDone, history = [] 
       showPose: a.showPose,
       setFocus: a.setFocus,
       setTapHandler: a.setTapHandler,
+      setFraming: a.setFraming,
       snapshot: a.snapshot,
       setView: (v) => {
         setCamView(v);
@@ -822,18 +910,34 @@ function Stage({ onSave, onAssess, onFail, request, onRequestDone, history = [] 
     };
   });
 
+  // Free pose is about the mannequin: start with the sheet tucked away and
+  // open it when a part is selected (its controls live in the sheet).
+  useEffect(() => setSheetMin(tool === "pose"), [tool]);
+  useEffect(() => {
+    if (selected) setSheetMin(false);
+  }, [selected]);
+
+  // Tell the camera how much of the stage the bottom sheet covers, so the
+  // mannequin is centred in the space that's actually visible.
+  useEffect(() => {
+    const el = sheetRef.current;
+    if (!el || !ready) return;
+    const report = () => api.current?.setInset(el.getBoundingClientRect().height);
+    report();
+    const ro = new ResizeObserver(report);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [ready]);
+
   const doFlash = (m: string) => {
     setFlash(m);
     window.setTimeout(() => setFlash(null), 1600);
   };
 
   // Bring the mannequin back into view after choosing a movement below it.
-  const showStage = () => {
-    const el = wrapRef.current;
-    if (!el) return;
-    const r = el.getBoundingClientRect();
-    if (r.top < 70 || r.bottom > window.innerHeight - 80) el.scrollIntoView({ behavior: "smooth", block: "center" });
-  };
+  // The stage is always on screen in the full-screen layout; just reset the
+  // sheet so the movement list isn't left half-scrolled.
+  const showStage = () => sheetRef.current?.scrollTo({ top: 0, behavior: "smooth" });
 
   const togglePain = (part: string) =>
     setPainParts((ps) => (ps.includes(part) ? ps.filter((x) => x !== part) : [...ps, part]));
@@ -844,7 +948,8 @@ function Stage({ onSave, onAssess, onFail, request, onRequestDone, history = [] 
   const step = painParts.length === 0 ? (presetKey === "Standing" ? 1 : 2) : 3;
 
   return (
-    <div className={"panel mannequin-panel" + (tool !== "pose" ? " checking" : "")}>
+    <div className={"mannequin-screen tool-" + tool}>
+      <div className="m-top">
       <div className="seg tool-switch" role="tablist" aria-label="Mannequin mode">
         {(
           [
@@ -858,19 +963,7 @@ function Stage({ onSave, onAssess, onFail, request, onRequestDone, history = [] 
           </button>
         ))}
       </div>
-      {tool === "pose" && (
-      <ol className="steps" aria-label="How it works">
-        <li className={step === 1 ? "on" : step > 1 ? "done" : ""}>
-          <span>1</span>Pick the movement
-        </li>
-        <li className={step === 2 ? "on" : step > 2 ? "done" : ""}>
-          <span>2</span>Tap where it hurts
-        </li>
-        <li className={step === 3 ? "on" : ""}>
-          <span>3</span>Save
-        </li>
-      </ol>
-      )}
+      </div>
 
       <div className="figure-wrap stage3d" ref={wrapRef}>
         {!ready && <div className="stage-loading">Carving your mannequin…</div>}
@@ -910,6 +1003,28 @@ function Stage({ onSave, onAssess, onFail, request, onRequestDone, history = [] 
         </div>
         )}
       </div>
+      <div className={"m-sheet" + (sheetMin ? " min" : "")} ref={sheetRef}>
+        <button
+          className="sheet-grip-btn"
+          aria-label={sheetMin ? "Show more" : "Show less — see the mannequin bigger"}
+          aria-expanded={!sheetMin}
+          onClick={() => setSheetMin((v) => !v)}
+        >
+          <span />
+        </button>
+      {tool === "pose" && (
+      <ol className="steps" aria-label="How it works">
+        <li className={step === 1 ? "on" : step > 1 ? "done" : ""}>
+          <span>1</span>Pick the movement
+        </li>
+        <li className={step === 2 ? "on" : step > 2 ? "done" : ""}>
+          <span>2</span>Tap where it hurts
+        </li>
+        <li className={step === 3 ? "on" : ""}>
+          <span>3</span>Save
+        </li>
+      </ol>
+      )}
       {(
         <div hidden={tool !== "check"}>
         <MovementCheck
@@ -1081,6 +1196,8 @@ function Stage({ onSave, onAssess, onFail, request, onRequestDone, history = [] 
 
       </>
       )}
+
+      </div>
 
       {saving && (
         <PainSheet

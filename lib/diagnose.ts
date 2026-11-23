@@ -141,15 +141,21 @@ export function buildFindings(markers: PainMarker[], movements: Movement[]): Fin
     if (mv.check) {
       const r = mv.check;
       const sm = summarizeCheck(r);
-      const side: Side = r.side === "L" ? "Left" : r.side === "R" ? "Right" : null;
+      const st = sm.spot.tags ?? [];
+      const side: Side =
+        r.side === "L" || st.includes("sideL") || st.includes("leftChest")
+          ? "Left"
+          : r.side === "R" || st.includes("sideR") || st.includes("rightChest")
+            ? "Right"
+            : null;
       const sideWord = side ? `${side} ` : "";
       const tested = sm.painful.map((t) => t.title.toLowerCase()).join(", ");
       out.push({
         loc: sm.spot.loc,
         side,
         intensity: sm.intensity,
-        types: r.types,
-        label: `${sideWord}${sm.area.label.toLowerCase()} — ${sm.spot.label.toLowerCase()}${tested ? ` (hurts: ${tested})` : ""}`,
+        types: sm.tags.includes("tender") && !r.types.includes("Tender to touch") ? [...r.types, "Tender to touch"] : r.types,
+        label: `${r.side ? sideWord : ""}${sm.area.label.toLowerCase()} — ${sm.spot.label.toLowerCase()}${tested ? ` (hurts: ${tested})` : ""}`,
         source: "movement",
         tags: sm.tags,
         medial: !!sm.spot.medial,
@@ -1205,6 +1211,17 @@ const CHECK_BOOSTS: Record<string, [string, number, string?][]> = {
   "achilles-rupture": [["cantTiptoe", 3, "Can't rise onto tiptoes"]],
   "upper-back-strain": [["twist", 1, "Hurts twisting"], ["protraction", 1, "Hurts reaching around"], ["extension", 0.5]],
   "rib-injury": [["breathing", 1.5, "Hurts taking a deep breath"]],
+  cardiac: [["cardiacFeatures", 6, "Pressure/tightness, or breathless, sweaty or spreading pain"], ["nonMechanical", 2, "Pain isn't changed by movement"]],
+  "chest-wall": [["tender", 3, "Pressing on the spot reproduces the pain"], ["twist", 1.5, "Hurts twisting"], ["chestStretch", 1.5, "Hurts opening the chest"], ["breathing", 1, "Hurts on a deep breath"]],
+  pleurisy: [["breathing", 1.5, "Hurts on a deep breath"]],
+  "abdominal-strain": [["crunch", 3, "Hurts tightening the tummy muscles"], ["twist", 1.5, "Hurts twisting"]],
+  ibs: [["eating", 2, "Changes with eating or bowel movements"]],
+  reflux: [["eating", 2.5, "Changes with eating"]],
+  gallbladder: [["eating", 2, "Changes with eating"]],
+  "peptic-ulcer": [["eating", 2, "Changes with eating"]],
+  "hernia-abdominal": [["cough", 2.5, "Worse coughing"]],
+  "inguinal-hernia": [["cough", 2.5, "Worse coughing"]],
+  appendicitis: [["tender", 1.5, "Tender when pressed"], ["cough", 1, "Worse coughing"]],
 };
 
 const MORE: Condition[] = [
@@ -2319,6 +2336,8 @@ export function triage(findings: Finding[], q: Intake): Triage {
   if (flag(c, "morningStiff")) raise("doctor", "Prolonged morning stiffness can mean an inflammatory condition");
   if (flag(c, "walking")) raise("doctor", "Leg pain on walking should be checked (circulation or spinal narrowing)");
   if (flag(c, "rash")) raise("doctor", "A painful rash may be shingles — antivirals work best within 3 days");
+  if (findings.some((f) => f.tags.includes("cardiacFeatures")))
+    raise("emergency", "Chest pain with pressure, breathlessness, sweating or spreading pain can be a heart attack");
   if (findings.some((f) => f.tags.includes("nonMechanical")))
     raise("doctor", "Pain that no movement or position changes may not be coming from muscles or joints — worth getting checked");
   if (flag(c, "weightLoss")) raise("doctor", "Weight loss or night pain should be investigated");

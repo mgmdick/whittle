@@ -5,7 +5,7 @@ import { relaxed, type E3, type JointName } from "./mannequin/rig";
 // person says whether each one hurts. Movements are authored for the RIGHT
 // side and mirrored for the left.
 
-export type AreaId = "neck" | "shoulder" | "elbow" | "wrist" | "upperBack" | "lowBack" | "hip" | "knee" | "ankle";
+export type AreaId = "neck" | "shoulder" | "elbow" | "wrist" | "chest" | "upperBack" | "abdomen" | "lowBack" | "hip" | "knee" | "ankle";
 export type Answer = "none" | "hurts" | "severe" | "cant";
 export type CamView = "front" | "angle" | "side" | "back";
 type Joints = Partial<Record<JointName, E3>>;
@@ -252,6 +252,32 @@ export const AREAS: Area[] = [
     ],
   },
   {
+    id: "chest",
+    label: "Chest",
+    sided: false,
+    parts: ["chest"],
+    spots: [
+      { id: "centre", label: "Centre of the chest / breastbone", loc: "chest" },
+      { id: "left", label: "Left side of the chest", loc: "chest", tags: ["leftChest"] },
+      { id: "right", label: "Right side of the chest", loc: "chest", tags: ["rightChest"] },
+      { id: "ribs", label: "Ribs, under the arm", loc: "chest", tags: ["ribs"] },
+    ],
+    tests: [
+      {
+        id: "heartQ",
+        title: "First, a safety question",
+        prompt: "Does it feel like pressure, squeezing or tightness — or come with breathlessness, sweating, feeling sick, or pain spreading to your arm, jaw or back?",
+        view: "front",
+        question: true,
+        tags: ["cardiacFeatures"],
+      },
+      { id: "press", title: "Press on it", prompt: "Press firmly on the sore spot with your fingers. Does that reproduce the pain?", view: "front", question: true, tags: ["tender"] },
+      { id: "breath", title: "Deep breath", prompt: "Take a big, deep breath in.", keyframes: [{ ...R, waist: [-6, 0, 0], neck: [-8, 0, 0], shoulderL: [0, 0, 14], shoulderR: [0, 0, -14] }], speed: 2, view: "front", tags: ["breathing"] },
+      { id: "twist", title: "Twist", prompt: "Cross your arms and turn your upper body to each side.", keyframes: [{ ...R, waist: [0, -40, 0], neck: [0, -15, 0], shoulderR: [-35, 90, 10], elbowR: [-90, 0, 0], shoulderL: [-35, -90, -10], elbowL: [-90, 0, 0] }], view: "front", tags: ["twist"] },
+      { id: "armsBack", title: "Open the chest", prompt: "Take your arms out and back, squeezing your shoulder blades together.", keyframes: [{ ...R, shoulderL: [30, 0, 70], shoulderR: [30, 0, -70], elbowL: [-10, 0, 0], elbowR: [-10, 0, 0], neck: [-8, 0, 0] }], view: "angle", tags: ["chestStretch"] },
+    ],
+  },
+  {
     id: "upperBack",
     label: "Upper back",
     sided: false,
@@ -266,6 +292,27 @@ export const AREAS: Area[] = [
       { id: "hug", title: "Hug yourself", prompt: "Wrap your arms around yourself, reaching for your shoulder blades.", keyframes: [{ ...R, shoulderR: [-60, 90, 35], elbowR: [-110, 0, 0], shoulderL: [-60, -90, -35], elbowL: [-110, 0, 0] }], view: "front", tags: ["protraction"] },
       { id: "arch", title: "Arch back", prompt: "Lift your chest and arch your upper back, squeezing your shoulder blades together.", keyframes: [{ ...R, waist: [-18, 0, 0], neck: [-15, 0, 0], shoulderL: [30, 0, 20], shoulderR: [30, 0, -20] }], view: "side", tags: ["extension"] },
       { id: "breath", title: "Deep breath", prompt: "Take a big, deep breath in.", keyframes: [{ ...R, waist: [-6, 0, 0], neck: [-8, 0, 0], shoulderL: [0, 0, 14], shoulderR: [0, 0, -14] }], speed: 2, view: "front", tags: ["breathing"] },
+    ],
+  },
+  {
+    id: "abdomen",
+    label: "Tummy",
+    sided: false,
+    parts: ["lowBack", "pelvis"],
+    spots: [
+      { id: "upperMid", label: "Upper middle (below the breastbone)", loc: "abdUpper" },
+      { id: "upperRight", label: "Upper right, under the ribs", loc: "abdUpper", tags: ["sideR"] },
+      { id: "upperLeft", label: "Upper left", loc: "abdUpper", tags: ["sideL"] },
+      { id: "lowerRight", label: "Lower right", loc: "abdLower", tags: ["sideR"] },
+      { id: "lowerLeft", label: "Lower left", loc: "abdLower", tags: ["sideL"] },
+      { id: "lowerMid", label: "Low down in the middle / groin", loc: "groin" },
+    ],
+    tests: [
+      { id: "curl", title: "Curl forward", prompt: "Tighten your tummy and curl your shoulders forward, as if starting a sit-up.", keyframes: [{ ...R, waist: [28, 0, 0], neck: [25, 0, 0], shoulderR: [-35, 90, 10], elbowR: [-90, 0, 0], shoulderL: [-35, -90, -10], elbowL: [-90, 0, 0] }], view: "side", tags: ["crunch"] },
+      { id: "twist", title: "Twist", prompt: "Keep your hips still and turn your shoulders to each side.", keyframes: [{ ...R, waist: [0, -40, 0], neck: [0, -20, 0], shoulderR: [-40, 0, -10], elbowR: [-90, 0, 0], shoulderL: [-30, 0, 10], elbowL: [-90, 0, 0] }], view: "front", tags: ["twist"] },
+      { id: "cough", title: "Cough", prompt: "Give a good cough. Does it make the pain worse?", view: "front", question: true, tags: ["cough"] },
+      { id: "press", title: "Press on it", prompt: "Press gently on the sore spot. Does it hurt more when you press, or when you let go quickly?", view: "front", question: true, tags: ["tender"] },
+      { id: "food", title: "Food & bowels", prompt: "Does it change with eating, or when you go to the toilet?", view: "front", question: true, tags: ["eating"] },
     ],
   },
   {
@@ -399,10 +446,25 @@ export const AREAS: Area[] = [
   },
 ];
 
+/** Camera framing per area: centre height and vertical extent (metres). */
+export const AREA_FRAME: Record<AreaId, { y: number; extent: number }> = {
+  neck: { y: 1.45, extent: 0.95 },
+  shoulder: { y: 1.3, extent: 1.5 },
+  elbow: { y: 1.2, extent: 1.3 },
+  wrist: { y: 1.15, extent: 1.15 },
+  chest: { y: 1.3, extent: 1.3 },
+  abdomen: { y: 1.05, extent: 1.35 },
+  upperBack: { y: 1.3, extent: 1.35 },
+  lowBack: { y: 1.0, extent: 2.15 },
+  hip: { y: 0.88, extent: 1.85 },
+  knee: { y: 0.58, extent: 1.3 },
+  ankle: { y: 0.34, extent: 0.9 },
+};
+
 export const AREA_BY_ID = Object.fromEntries(AREAS.map((a) => [a.id, a])) as Record<AreaId, Area>;
 
-/** Mannequin part tapped → body area. */
-export function areaForPart(part: string): { area: AreaId; side: "L" | "R" | null } {
+/** Mannequin part tapped (and whether on its front) → body area. */
+export function areaForPart(part: string, front = false): { area: AreaId; side: "L" | "R" | null } {
   const side = part.endsWith("L") ? "L" : part.endsWith("R") ? "R" : null;
   const base = part.replace(/[LR]$/, "");
   const map: Record<string, AreaId> = {
@@ -422,6 +484,8 @@ export function areaForPart(part: string): { area: AreaId; side: "L" | "R" | nul
     shin: "knee",
     foot: "ankle",
   };
+  if (front && base === "chest") return { area: "chest", side: null };
+  if (front && (base === "lowBack" || base === "pelvis")) return { area: "abdomen", side: null };
   return { area: map[base] ?? "lowBack", side };
 }
 

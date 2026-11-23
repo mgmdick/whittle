@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ANSWERS,
   AREAS,
+  AREA_FRAME,
   AREA_BY_ID,
   areaForPart,
   fillSide,
@@ -14,7 +15,7 @@ import {
   type CheckResult,
 } from "@/lib/movementCheck";
 import { poseFromAngles, relaxed, type Pose } from "@/lib/mannequin/rig";
-import type { MoveOpts } from "./Mannequin3D";
+import { FULL_BODY, type Framing, type MoveOpts } from "./Mannequin3D";
 import { PAIN_TYPES, intensityColor, uid, type Movement } from "@/lib/types";
 
 export type CheckApi = {
@@ -22,8 +23,9 @@ export type CheckApi = {
   stopMove: () => void;
   showPose: (p: Pose) => void;
   setFocus: (parts: string[], tone?: "select" | "pain") => void;
-  setTapHandler: (fn: ((part: string) => void) | null) => void;
+  setTapHandler: (fn: ((part: string, front: boolean) => void) | null) => void;
   setView: (v: CamView) => void;
+  setFraming: (f: Framing) => void;
   snapshot: () => string;
 };
 
@@ -69,6 +71,7 @@ export default function MovementCheck({ active = true, api, ready, onSave, onAss
   const [mechanical, setMechanical] = useState<boolean | null>(null);
   const [types, setTypes] = useState<string[]>([]);
   const [saved, setSaved] = useState(false);
+  const [showAreas, setShowAreas] = useState(false);
 
   const waved = useRef(false);
   const startedAt = useRef(Date.now());
@@ -124,20 +127,22 @@ export default function MovementCheck({ active = true, api, ready, onSave, onAss
     if (phase === "area") {
       m.stopMove();
       m.setFocus([]);
+      m.setFraming(FULL_BODY);
       m.setView("angle");
       if (!waved.current) {
         waved.current = true;
         const frames = [WAVE[0], WAVE[1], WAVE[0], WAVE[1], WAVE[0]].map((f) => poseFromAngles(f as never, "R"));
         m.playMove(frames, 0.32, { once: true, hold: 0.15 });
       }
-      m.setTapHandler((part) => {
-        const r = areaForPart(part);
+      m.setTapHandler((part, front) => {
+        const r = areaForPart(part, front);
         chooseArea(r.area, r.side);
       });
       return () => m.setTapHandler(null);
     }
     m.setTapHandler(null);
     if (!A) return;
+    m.setFraming(phase === "summary" ? FULL_BODY : AREA_FRAME[A.id]);
     if (phase === "side" || phase === "spot") {
       m.stopMove();
       m.setFocus(partsFor(A.id, side));
@@ -165,7 +170,7 @@ export default function MovementCheck({ active = true, api, ready, onSave, onAss
   // back into the designed layout, wherever the page was scrolled to.
   useEffect(() => {
     if (!active || phase === "area") return;
-    window.scrollTo({ top: 0, behavior: "smooth" });
+    document.querySelector(".m-sheet")?.scrollTo({ top: 0, behavior: "smooth" });
   }, [phase, idx, active]);
 
   const nextTest = () => {
@@ -261,14 +266,20 @@ export default function MovementCheck({ active = true, api, ready, onSave, onAss
           <>
             <div className="eyebrow">Movement check</div>
             <h2 className="qa-q">Where does it hurt?</h2>
-            <p className="muted qa-sub">Tap the mannequin, or choose below. Then I&apos;ll show you some movements to try.</p>
-            <div className="chips qa-choices">
-              {AREAS.map((a) => (
-                <button key={a.id} className="chip big" onClick={() => chooseArea(a.id, null)}>
-                  {a.label}
-                </button>
-              ))}
-            </div>
+            <p className="muted qa-sub">Tap the sore spot on the mannequin — front or back. I&apos;ll show you some movements to try.</p>
+            {showAreas ? (
+              <div className="chips qa-choices">
+                {AREAS.map((a) => (
+                  <button key={a.id} className="chip big" onClick={() => chooseArea(a.id, null)}>
+                    {a.label}
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <button className="btn ghost small" onClick={() => setShowAreas(true)}>
+                Or pick from a list
+              </button>
+            )}
           </>
         )}
 

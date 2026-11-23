@@ -6,7 +6,7 @@ import dynamic from "next/dynamic";
 const Mannequin3D = dynamic(() => import("@/components/Mannequin3D"), {
   ssr: false,
   loading: () => (
-    <div className="panel">
+    <div className="mannequin-screen">
       <div className="figure-wrap stage3d">
         <div className="stage-loading">Carving your mannequin…</div>
       </div>
@@ -52,7 +52,7 @@ export default function Home() {
   };
 
   return (
-    <div className="app">
+    <div className={"app" + (tab === "dummy" ? " immersive" : "")}>
       <header className="top">
         <div className="brand">
           <span className="logo" aria-hidden>
